@@ -7,10 +7,10 @@ undo/redo, selection, clipboard, word wrap and syntax colours.
 import bisect
 import re
 
-from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import (QBrush, QColor, QFontMetrics, QGuiApplication, QKeySequence, QPainter, QPen,
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import (QBrush, QColor, QFont, QFontMetrics, QGuiApplication, QKeySequence, QPainter, QPen,
                            QPolygonF)
-from PySide6.QtWidgets import QAbstractScrollArea, QFrame, QWidget
+from PySide6.QtWidgets import QAbstractScrollArea, QFrame, QToolTip, QWidget
 
 from . import theme
 
@@ -70,9 +70,11 @@ class EditorPane(QAbstractScrollArea):
     contextRequested = Signal(int, QPoint)
     focusedIn = Signal()
     resized = Signal()
+    blameClicked = Signal(int)        # real line whose blame cell was clicked
 
     NUM_W = 58
     SIGN_W = 22
+    BLAME_W = 300
 
     def __init__(self, parent=None, show_sign=True):
         super().__init__(parent)
@@ -82,6 +84,9 @@ class EditorPane(QAbstractScrollArea):
         self._ys = [0]
         self._li2row = {}
         self.readonly = False
+        self.blame = None             # per real line: {sha, author, time, summary}; None = column hidden
+        self.blame_w = 0
+        self.NUM_W = EditorPane.NUM_W
         self.wrap = False
         self.wrap_cols = None
         self.show_sign = show_sign
@@ -118,6 +123,67 @@ class EditorPane(QAbstractScrollArea):
         self.cw = fm.horizontalAdvance("M" * 64) / 64.0
         self.rh = max(fm.height() + 8, 22)
         self.verticalScrollBar().setSingleStep(self.rh)
+
+    # ------------------------------------------------------------ blame column
+    def set_blame(self, data):
+        """Show (or with None hide) the 'who changed this line' column to the left of the line numbers."""
+        self.blame = data or None
+        self.blame_w = self.BLAME_W if self.blame else 0
+        self.NUM_W = EditorPane.NUM_W + self.blame_w
+        self._update_bars()
+        self.viewport().update()
+        self.resized.emit()
+
+    def _blame_at(self, pos):
+        if not self.blame_w or pos.x() >= self.blame_w:
+            return None
+        r = self.row_at_y(int(pos.y()))
+        li = self.rows[r].li if r >= 0 else None
+        if li is None or li >= len(self.blame) or self.blame[li] is None:
+            return None
+        return li
+
+    @staticmethod
+    def _age(t):
+        import time
+        d = max(0, time.time() - t)
+        for secs, unit in ((31557600, "y"), (2629800, "mo"), (604800, "w"), (86400, "d"), (3600, "h"), (60, "m")):
+            if d >= secs:
+                return f"{int(d // secs)}{unit} ago"
+        return "just now"
+
+    def viewportEvent(self, ev):
+        if ev.type() == QEvent.ToolTip and self.blame_w:
+            li = self._blame_at(ev.pos())
+            if li is not None:
+                import time
+                b = self.blame[li]
+                when = time.strftime("%Y-%m-%d %H:%M", time.localtime(b["time"])) if b["time"] else ""
+                QToolTip.showText(ev.globalPos(), f"{b['sha'][:8]}  {b['author']}  {when}\n\n{b['summary']}\n\n(click to open the commit)", self)
+                return True
+            QToolTip.hideText()
+        return super().viewportEvent(ev)
+
+    @staticmethod
+    def _sha_color(sha):
+        h = int(sha[:6], 16) % 360 if sha and set(sha) != {"0"} else 30
+        return QColor.fromHsv(h, 120 if set(sha) != {"0"} else 200, 200)
+
+    def _paint_blame(self, p, y, li):
+        if li is None or li >= len(self.blame) or self.blame[li] is None:
+            return
+        b = self.blame[li]
+        col = self._sha_color(b["sha"])
+        p.fillRect(QRect(5, int(y) + 2, 3, self.rh - 4), col)
+        f = p.font()
+        old = QFont(f)
+        f.setPointSizeF(max(7.0, f.pointSizeF() - 2))
+        p.setFont(f)
+        p.setPen(QColor(theme.MUTED))
+        text = f"{b['sha'][:7]}  {b['author']} · {self._age(b['time'])}" if b["time"] else f"{b['author']}"
+        text = QFontMetrics(f).elidedText(text, Qt.ElideRight, self.blame_w - 18)
+        p.drawText(QRect(14, int(y), self.blame_w - 16, self.rh), Qt.AlignVCenter | Qt.AlignLeft, text)
+        p.setFont(old)
 
     # ------------------------------------------------------------ geometry
     def text_x(self):
@@ -678,6 +744,10 @@ class EditorPane(QAbstractScrollArea):
             return
         if e.button() != Qt.LeftButton:
             return
+        bl = self._blame_at(e.position())
+        if bl is not None:
+            self.blameClicked.emit(bl)
+            return
         r = self.row_at_y(int(e.position().y()))
         li, c = self._pos_to_cursor(e.position())
         self.want_dcol = None
@@ -779,6 +849,8 @@ class EditorPane(QAbstractScrollArea):
             r += 1
         p.setPen(QColor(theme.HOVER))
         p.drawLine(self.NUM_W, 0, self.NUM_W, h)
+        if self.blame_w:
+            p.drawLine(self.blame_w, 0, self.blame_w, h)
         if self.current_rows:
             a, b = self.current_rows
             ya = self.row_top(a) - off
@@ -801,9 +873,11 @@ class EditorPane(QAbstractScrollArea):
         if row.bar:
             p.fillRect(QRect(0, int(y), 4, nl * self.rh), row.bar)
         li = row.li
+        if self.blame_w:
+            self._paint_blame(p, y, li)
         if li is not None:
             p.setPen(QColor("#8b91a3"))
-            p.drawText(QRect(0, int(y), self.NUM_W - 10, self.rh), Qt.AlignVCenter | Qt.AlignRight, str(li + 1))
+            p.drawText(QRect(self.blame_w, int(y), EditorPane.NUM_W - 10, self.rh), Qt.AlignVCenter | Qt.AlignRight, str(li + 1))
         if self.show_sign and row.sign:
             p.setPen(QColor(theme.RED if row.sign == "-" else theme.GREEN))
             f = p.font()

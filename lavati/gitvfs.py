@@ -544,3 +544,86 @@ def apply_renames(nodes, pairs):
     if done:
         engine.settle_dirs(nodes)
     return done
+
+
+# ================================================================ GitLens-style helpers
+ZERO_SHA = "0" * 40
+
+
+def relpath(repo, path):
+    """Path of `path` inside `repo`, with forward slashes."""
+    return os.path.relpath(os.path.realpath(path), os.path.realpath(repo)).replace(os.sep, "/")
+
+
+def locate(path):
+    """(repo, relative path) when `path` is a tracked file in a git repository, else None."""
+    if not path or not os.path.isfile(path) or not git_path():
+        return None
+    repo = find_repo(path)
+    if not repo:
+        return None
+    rel = relpath(repo, path)
+    if rel.startswith("..") or run(repo, "ls-files", "--error-unmatch", "--", rel, check=False, text=True).strip() != rel:
+        return None
+    return repo, rel
+
+
+def blame(repo, rel, contents=None):
+    """Who last changed each line: [{sha, author, time, summary}, ...] one per line.
+
+    `contents` (text) blames an edited buffer instead of the file on disk; changed lines show as uncommitted."""
+    args = ["blame", "--line-porcelain"]
+    inp = None
+    if contents is not None:
+        args += ["--contents", "-"]
+        inp = contents.encode("utf-8", "replace")
+    out = run(repo, *args, "--", rel, input=inp, text=True)
+    res, cur = [], None
+    for line in out.split("\n"):
+        if line.startswith("\t"):
+            res.append(cur)
+            cur = None
+        elif cur is None:
+            parts = line.split(" ")
+            if len(parts[0]) >= 40:
+                cur = {"sha": parts[0], "author": "", "time": 0, "summary": ""}
+        elif line.startswith("author "):
+            cur["author"] = line[7:]
+        elif line.startswith("author-time "):
+            cur["time"] = int(line[12:] or 0)
+        elif line.startswith("summary "):
+            cur["summary"] = line[8:]
+    for c in res:
+        if c["sha"] == ZERO_SHA:
+            c["author"], c["summary"] = "Not committed yet", "Local changes that are not committed"
+    return res
+
+
+def file_history(repo, rel, limit=500):
+    """Commits that touched one file (renames followed): same tuples as log()."""
+    fmt = "%H%x1f%an%x1f%aI%x1f%s%x1f%P"
+    out = run(repo, "log", "--follow", f"--format={fmt}", f"-n{int(limit)}", "--", rel, text=True, check=False)
+    res = []
+    for line in out.splitlines():
+        p = line.split("\x1f")
+        if len(p) >= 5:
+            res.append((p[0], p[0][:8], p[1], p[2], p[3], p[4].split()))
+    return res
+
+
+def line_history(repo, rel, start, end, limit=40):
+    """`git log -L`: the commits (with patches) that changed lines start..end (1-based) of a file."""
+    return run(repo, "log", "--no-color", "--no-ext-diff", f"-n{int(limit)}", f"-L{int(start)},{int(end)}:{rel}", text=True, check=False)
+
+
+def show_commit(repo, sha, max_chars=200_000):
+    return run(repo, "show", "--no-color", "--no-ext-diff", "--stat", "--format=fuller", safe_rev(sha), "--", text=True, check=False)[:max_chars]
+
+
+def file_at(repo, rev, rel):
+    """Bytes of `rel` as of `rev` (a commit-ish, or 'INDEX' for the staged version); None if it did not exist."""
+    spec = f":{rel}" if rev == "INDEX" else f"{safe_rev(rev)}:{rel}"
+    try:
+        return run(repo, "cat-file", "blob", spec)
+    except GitError:
+        return None

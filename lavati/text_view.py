@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (QScrollArea, QCheckBox, QComboBox, QDialog, QDial
 
 from . import engine, fileformats, highlight, platform_utils, theme
 from .workers import run_responsive
+from .gitlens import GitLensMixin
 from .editor import CopyGutter, EditorPane, ERow, MiniMap
 from .textdialogs import PatchDialog, RulesDialog, store_rules_in_config
 from .widgets import Pill, Segmented, ToolbarAdapter, sty, toast, tool_button, vsep
@@ -95,8 +96,9 @@ class SideHeader(QFrame):
         lay.addWidget(self.meta)
 
 
-class TextCompareView(QWidget):
+class TextCompareView(GitLensMixin, QWidget):
     resultChanged = Signal(str)
+    blameReady = Signal(str, int, object)       # side, request number, blame data (or the exception)
 
     def __init__(self, cfg, left_path, right_path, parent=None, extra=None):
         super().__init__(parent)
@@ -128,7 +130,10 @@ class TextCompareView(QWidget):
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self._rebuild)
+        self.blame_on = False
+        self.git_info = {"L": None, "R": None}
         self._ui()
+        self._gl_init()
         self._load_all()
         self._rebuild()
         if self.hunks:
@@ -172,6 +177,16 @@ class TextCompareView(QWidget):
         self.b_tr.clicked.connect(lambda: self.take("left"))
         bl.addWidget(self.b_tl)
         bl.addWidget(self.b_tr)
+        self.b_combine = tool_button("Combine", "merge", "Keep both versions of a difference: the left lines followed by the right lines, or the other way round")
+        self.b_combine.setPopupMode(QToolButton.InstantPopup)
+        cm = QMenu(self.b_combine)
+        cm.addAction("Combine this difference: left first, then right", lambda: self.combine("L"))
+        cm.addAction("Combine this difference: right first, then left", lambda: self.combine("R"))
+        cm.addSeparator()
+        cm.addAction("Combine ALL differences: left first, then right…", lambda: self.combine_all("L"))
+        cm.addAction("Combine ALL differences: right first, then left…", lambda: self.combine_all("R"))
+        self.b_combine.setMenu(cm)
+        bl.addWidget(self.b_combine)
         self.b_undo = tool_button("Undo", "undo", "Undo in the active pane (Ctrl+Z)")
         self.b_redo = tool_button("Redo", "redo", "Redo in the active pane (Ctrl+Y)", icon_only=True)
         self.b_undo.clicked.connect(self.undo)
@@ -193,6 +208,11 @@ class TextCompareView(QWidget):
         m.addAction("Clear manual alignments", self.clear_alignments)
         self.b_align.setMenu(m)
         bl.addWidget(self.b_align)
+        self.b_git = tool_button("Git", "git", "Blame (who changed each line), file history and comparing with earlier versions")
+        self.b_git.setPopupMode(QToolButton.InstantPopup)
+        self.b_git.setMenu(self._git_menu())
+        self.b_git.setVisible(False)
+        bl.addWidget(self.b_git)
         self.b_patch = tool_button("Patch", "patch", "Show the differences as a unified diff")
         self.b_patch.clicked.connect(self.show_patch)
         self.b_find = tool_button("Find", "search", "Find in both files (Ctrl+F)", icon_only=True)
@@ -419,6 +439,7 @@ class TextCompareView(QWidget):
             self._load_side(k)
         self._update_rules()
         self.sides["L"].hl_gen = self.sides["R"].hl_gen = -1
+        self._gl_detect()
 
     def _load_side(self, k, encoding=None):
         s = self.sides[k]
@@ -728,6 +749,7 @@ class TextCompareView(QWidget):
         s = self.sides[k]
         s.gen += 1
         self._span_cache = {}
+        self._blame_edited()
         self._refresh_headers()
         self._update_buttons()
         big = len(self.panes["L"].lines) + len(self.panes["R"].lines) > 30000
@@ -879,6 +901,48 @@ class TextCompareView(QWidget):
         if self.hunks:
             self.goto_hunk(min(h, len(self.hunks) - 1))
 
+    def combine(self, first="L", hunk=None):
+        """Keep BOTH versions of a difference. `first` says which side's lines come first; both sides get the result."""
+        self._flush()
+        h = hunk if hunk is not None else self._current_hunk()
+        if h is None or h < 0 or h >= len(self.hunks):
+            return
+        if not self._combine_one(first, self.hunks[h]):
+            return
+        self._flush()
+        if self.hunks:
+            self.goto_hunk(min(h, len(self.hunks) - 1))
+
+    def _combine_one(self, first, hk):
+        i1, i2, j1, j2 = hk
+        L, R = self.panes["L"].lines, self.panes["R"].lines
+        a, b = list(L[i1:i2]), list(R[j1:j2])
+        merged = a + b if first == "L" else b + a
+        done = False
+        for k, (x1, x2) in (("L", (i1, i2)), ("R", (j1, j2))):
+            if self.sides[k].readonly:
+                continue
+            self.panes[k].replace_lines(x1, x2, merged)
+            done = True
+        if not done:
+            toast("Both sides are read-only", "warn")
+        return done
+
+    def combine_all(self, first="L"):
+        self._flush()
+        hunks = list(self.hunks)
+        if not hunks:
+            return
+        name = "left" if first == "L" else "right"
+        if QMessageBox.question(self, "Combine all differences",
+                                f"Keep both versions of all {len(hunks)} differences ({name} lines first)?\n\n"
+                                "Each difference becomes the lines of both sides, so the two files end up identical. "
+                                "You can undo this step by step with Ctrl+Z.") != QMessageBox.Yes:
+            return
+        for hk in reversed(hunks):                      # last first, so earlier line numbers stay valid
+            self._combine_one(first, hk)
+        self._flush()
+
     def copy_line(self, direction, row):
         """Copy a single modified line pair across."""
         self._flush()
@@ -918,6 +982,19 @@ class TextCompareView(QWidget):
             m.addAction("Copy difference to the left", lambda: self.take("left", h)).setEnabled(not self.sides["L"].readonly)
             if self.pairs[self.disp[r]][2] == "mod":
                 m.addAction("Copy this line across", lambda: self.copy_line("right" if k == "L" else "left", r))
+            m.addAction("Combine both: left lines first", lambda: self.combine("L", h))
+            m.addAction("Combine both: right lines first", lambda: self.combine("R", h))
+        if self.git_info.get(k):
+            m.addSeparator()
+            gm = m.addMenu("Git")
+            ba = gm.addAction("Show blame (who changed each line)")
+            ba.setCheckable(True)
+            ba.setChecked(self.blame_on)
+            ba.toggled.connect(self.toggle_blame)
+            gm.addAction("File history…", lambda: self.file_history(k))
+            gm.addAction("History of the selected lines…", lambda: self.line_history(k))
+            gm.addAction("Compare with the last committed version (HEAD)", lambda: self.compare_with_version("HEAD", k))
+            gm.addAction("Compare with the staged version", lambda: self.compare_with_version("INDEX", k))
         m.addSeparator()
         m.addAction("Align the cursor lines", self.align_cursors)
         if self.anchors:

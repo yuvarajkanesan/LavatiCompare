@@ -44,6 +44,13 @@ blob ids, so no file is read until you open it. Renames are detected with `git -
 "commit vs parent" and "commit A vs commit B", and *three-way folder merge* uses `git merge-base` as the base. Needs git 2.30+.
 Location syntax for paths and scripts: `git:<repo>#<revision>` (e.g. `git:C:\repo#HEAD~1`; revisions `WORKTREE`, `INDEX`).
 
+*GitLens-style tools in Text Compare.* When a file is tracked by git, a **Git** button appears: **Show blame** adds a column
+to each pane with the commit, author and age of every line (hover for the message, click to open the commit; it follows
+your edits live), **File history** lists every commit that touched the file (compare any version with the current file, the
+previous version, or another commit), **History of the selected lines** runs `git log -L`, and you can compare the file with
+its HEAD or staged version. **Combine** keeps both sides of a difference (left lines first or right lines first), for one
+difference or all of them.
+
 ## Scripting
 ```
 set SRC="D:\work"

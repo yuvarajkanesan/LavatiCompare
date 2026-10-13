@@ -1,0 +1,5 @@
+Lavati Compare compares folders, text, tables, binaries, pictures, media tags, version info, the registry, documents and Git revisions, and merges and synchronises them.
+
+Nothing else needs to be installed first. Optional extras, such as a portable Git, are downloaded by the app only when you ask for them.
+
+If Lavati Compare is already installed, this setup updates it and keeps your settings.

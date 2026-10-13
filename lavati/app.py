@@ -300,6 +300,8 @@ class MainWindow(QMainWindow):
             self._act(nm, title, lambda k=k: self.new_session(k))
         self._act(f, "&Open two files or folders…", self.open_dialog, "Ctrl+O", "Compare any two files or folders", "folder_open", "open")
         self._act(f, "Compare &Git revisions…", self.open_git, None, "Branches, tags, commits, index and working tree", "git", "git")
+        self._act(f, "Local changes vs &last commit…", self.open_local_changes, None,
+                  "Compare your working copy of a git repository with its last commit", "git")
         self._act(f, "Connect to a &server…", self.connect_server, None, "Compare a local folder with FTP, SFTP, WebDAV, S3 ...", "plug")
         f.addSeparator()
         self._act(f, "&Save changes", lambda: self._cur("save"), "Ctrl+S", "Save modified files", "save", "save")
@@ -542,6 +544,26 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self.close)
 
     # ----------------------------------------------------------- sessions
+    def open_local_changes(self, start_path=""):
+        """One step: current local changes (working tree) against the last commit (HEAD) of a repository."""
+        from .widgets import pick_folder
+        start = start_path
+        if not start:
+            for p in (self.home.p_left.text(), self.home.p_right.text()):
+                if p and os.path.exists(p):
+                    start = p
+                    break
+        repo = gitvfs.find_repo(start) if start else ""
+        if not repo:
+            d = pick_folder(self, "Choose the repository folder", start)
+            repo = gitvfs.find_repo(d) if d else ""
+            if not repo:
+                if d:
+                    QMessageBox.warning(self, "Git", "That folder is not inside a Git repository.")
+                return None
+        return self.open_compare("folder", gitvfs.make_spec(repo, "HEAD"), gitvfs.make_spec(repo, "WORKTREE"),
+                                 {"git_renames": True})
+
     def open_git(self, start_path=""):
         """Git browser: pick a repository and two revisions, then compare them as folders (or merge with the merge base)."""
         start = start_path or self.home.p_left.text() or self.home.p_right.text()

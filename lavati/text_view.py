@@ -993,8 +993,8 @@ class TextCompareView(GitLensMixin, QWidget):
             ba.toggled.connect(self.toggle_blame)
             gm.addAction("File history…", lambda: self.file_history(k))
             gm.addAction("History of the selected lines…", lambda: self.line_history(k))
-            gm.addAction("Compare with the last committed version (HEAD)", lambda: self.compare_with_version("HEAD", k))
-            gm.addAction("Compare with the staged version", lambda: self.compare_with_version("INDEX", k))
+            gm.addAction("Compare local changes with the last commit (HEAD)", lambda: self.compare_with_version("HEAD", k))
+            gm.addAction("Compare local changes with the staged version", lambda: self.compare_with_version("INDEX", k))
         m.addSeparator()
         m.addAction("Align the cursor lines", self.align_cursors)
         if self.anchors:

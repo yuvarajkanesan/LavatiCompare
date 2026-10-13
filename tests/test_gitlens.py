@@ -148,3 +148,23 @@ class GitLensTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(HAVE_GIT, "git 2.30+ not available")
+class QuickCompareTests(unittest.TestCase):
+    def test_quick_presets(self):
+        from lavati.git_view import GitCompareDialog
+        d = tempfile.mkdtemp(prefix="lavati-quick-")
+        try:
+            git(d, "init", "-q", "-b", "main")
+            with open(os.path.join(d, "f.txt"), "w") as fh:
+                fh.write("one\n")
+            git(d, "add", "-A")
+            git(d, "commit", "-q", "-m", "c1")
+            top = gitvfs.find_repo(d)
+            for (l, r), want in (((2, 0), ("HEAD", "WORKTREE")), ((2, 1), ("HEAD", "INDEX")), ((1, 0), ("INDEX", "WORKTREE"))):
+                dlg = GitCompareDialog(None, d)
+                dlg._preset(l, r)
+                self.assertEqual(dlg.result_specs, (gitvfs.make_spec(top, want[0]), gitvfs.make_spec(top, want[1])))
+        finally:
+            shutil.rmtree(d, ignore_errors=True)

@@ -191,6 +191,20 @@ class GitCompareDialog(QDialog):
         lay.addWidget(self.c_renames)
         self.c_base = QCheckBox("Use the merge base of the two sides as the left side  (what a merge of right into left would change)")
         lay.addWidget(self.c_base)
+        quick = QHBoxLayout()
+        ql = QLabel("Quick compare")
+        ql.setStyleSheet(f"color:{theme.MUTED}; font-weight:700; font-size:8pt; letter-spacing:1px;")
+        quick.addWidget(ql)
+        for text, tip, left, right in (
+                ("Local changes vs last commit", "Everything you changed since the last commit (working tree against HEAD)", 2, 0),
+                ("Staged vs last commit", "What the next commit will contain (index against HEAD)", 2, 1),
+                ("Local changes vs staged", "Changes you have not staged yet (working tree against the index)", 1, 0)):
+            qb = QPushButton(text)
+            qb.setToolTip(tip)
+            qb.clicked.connect(lambda _=False, l=left, r=right: self._preset(l, r))
+            quick.addWidget(qb)
+        quick.addStretch(1)
+        lay.addLayout(quick)
         sep = QFrame()
         sep.setFixedHeight(1)
         sep.setStyleSheet(f"background:{theme.BORDER};")
@@ -293,6 +307,13 @@ class GitCompareDialog(QDialog):
 
     def _commit_vs_parent(self):
         self._history("R")
+
+    def _preset(self, left_idx, right_idx):
+        """Set both sides (indexes into SOURCES) and compare straight away."""
+        self.c_base.setChecked(False)
+        self.src["L"].setCurrentIndex(left_idx)
+        self.src["R"].setCurrentIndex(right_idx)
+        self._go(False)
 
     def _go(self, three_way):
         repo = self.repo.text().strip()

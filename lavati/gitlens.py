@@ -299,6 +299,6 @@ class GitLensMixin:
         m.addAction("File history…", self.file_history)
         m.addAction("History of the selected lines…", self.line_history)
         m.addSeparator()
-        m.addAction("Compare with the last committed version (HEAD)", lambda: self.compare_with_version("HEAD"))
-        m.addAction("Compare with the staged version", lambda: self.compare_with_version("INDEX"))
+        m.addAction("Compare local changes with the last commit (HEAD)", lambda: self.compare_with_version("HEAD"))
+        m.addAction("Compare local changes with the staged version", lambda: self.compare_with_version("INDEX"))
         return m

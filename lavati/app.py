@@ -215,6 +215,7 @@ class MainWindow(QMainWindow):
         self.toast = Toast(self)
         self.overlay = DropOverlay(self)
         self.actions_by_name = {}
+        self._tab_info = {}               # view -> how to reopen it on the next start
         self._menus()
         self._toolbar()
         for i in range(1, 10):
@@ -256,7 +257,11 @@ class MainWindow(QMainWindow):
 
     def _menus(self):
         mb = self.menuBar()
-        f = mb.addMenu("&File")
+        mb.setStyleSheet(f"QMenuBar {{ background:{theme.SURFACE}; border-bottom:1px solid {theme.BORDER}; padding:2px 8px; }}"
+                         f"QMenuBar::item {{ padding:6px 14px; margin:2px 1px; border-radius:6px; background:transparent; color:{theme.TEXT}; }}"
+                         f"QMenuBar::item:selected {{ background:{theme.HOVER2}; }}"
+                         f"QMenuBar::item:pressed {{ background:{theme.ACCENT_SOFT}; }}")
+        f = mb.addMenu("File")
         nm = f.addMenu("&New comparison")
         for k, (title, *_rest) in KINDS.items():
             self._act(nm, title, lambda k=k: self.new_session(k))
@@ -271,7 +276,7 @@ class MainWindow(QMainWindow):
         f.addSeparator()
         self._act(f, "E&xit", self.close, "Ctrl+Q")
 
-        e = mb.addMenu("&Edit")
+        e = mb.addMenu("Edit")
         self._act(e, "&Undo", lambda: self._cur("undo"), "Ctrl+Z", "Undo in the active pane", "undo", "undo")
         self._act(e, "&Redo", lambda: self._cur("redo"), "Ctrl+Y", "Redo in the active pane", "redo", "redo")
         e.addSeparator()
@@ -281,7 +286,7 @@ class MainWindow(QMainWindow):
         e.addSeparator()
         self._act(e, "S&wap left and right", lambda: self._cur("swap_sides"), "Ctrl+Shift+X", "Swap the two sides", "swap", "swap")
 
-        v = mb.addMenu("&View")
+        v = mb.addMenu("View")
         self._act(v, "&Previous difference", lambda: self._cur("step", -1), "F7", "Previous difference", "up", "prev")
         self._act(v, "&Next difference", lambda: self._cur("step", 1), "F8", "Next difference", "down", "next")
         self._act(v, "&Refresh", self._refresh, "F5", "Compare again", "refresh", "refresh")
@@ -304,7 +309,7 @@ class MainWindow(QMainWindow):
             grp.addAction(a)
             tm.addAction(a)
 
-        t = mb.addMenu("&Tools")
+        t = mb.addMenu("Tools")
         self._act(t, "&Synchronize folders…", lambda: self._cur("sync"), "Ctrl+Shift+Y", "Synchronize the two folders", "refresh", "sync")
         self._act(t, "&Merge…", lambda: self.new_session("merge"), None, "Two- or three-way merge of files or folders", "merge")
         t.addSeparator()
@@ -312,7 +317,7 @@ class MainWindow(QMainWindow):
         self._act(t, "S&cripts && automation", lambda: self._home_page(3))
         self._act(t, "&Settings", lambda: self._home_page(4), "Ctrl+,", "Settings", "settings", "settings")
 
-        h = mb.addMenu("&Help")
+        h = mb.addMenu("Help")
         self._act(h, "&Keyboard shortcuts", lambda: ShortcutsDialog(self).exec(), "F1")
         self._act(h, "&About Lavati Compare", lambda: AboutDialog(self).exec())
 
@@ -593,6 +598,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Could not open session", f"{type(e).__name__}: {e}")
             return None
         self._remember(kind, v, name, left, right)
+        self._tab_info[v] = dict(kind=kind, left=left, right=right)
         if hasattr(v, "optionsChanged"):
             v.optionsChanged.connect(lambda k=kind, vv=v, n=name: self._remember(k, vv, n, vv.left, vv.right))
         v.resultChanged.connect(lambda txt, k=kind, vv=v: self._result(k, getattr(vv, "left", left), getattr(vv, "right", right), txt))
@@ -644,6 +650,7 @@ class MainWindow(QMainWindow):
                              extra={"base": base or "", "output": output})
         v.resultChanged.connect(lambda txt, l=ours, r=theirs: self._result("merge", l, r, txt))
         v.saved.connect(lambda _p: setattr(self, "merge_saved", True))
+        self._tab_info[v] = dict(kind="merge", left=ours, right=theirs, base=base or "", output=output)
         self.add_tab(v, name)
         self.home.refresh()
         return v
@@ -692,6 +699,38 @@ class MainWindow(QMainWindow):
                 if kind:
                     self.open_compare(kind, self.home.p_left.text(), paths[0])
 
+    def save_open_tabs(self):
+        """Remember the open tabs (in tab order) so the next start can bring them back."""
+        out = []
+        for i in range(1, self.tabs.count()):
+            info = self._tab_info.get(self.tabs.widget(i))
+            if info:
+                info = dict(info)
+                w = self.tabs.widget(i)
+                if hasattr(w, "session_extra"):
+                    info["extra"] = w.session_extra()
+                out.append(info)
+        self.cfg["open_tabs"] = out[-12:]
+
+    def restore_tabs(self):
+        """Reopen the tabs saved at the last exit. Entries whose files vanished are skipped."""
+        n = 0
+        for info in list(self.cfg["open_tabs"]):
+            try:
+                paths = [info.get("left", ""), info.get("right", "")]
+                if not all(vfs.is_remote_spec(p) or gitvfs.is_git_spec(p) or os.path.exists(p) or _is_registry(p) for p in paths if p):
+                    continue
+                if info.get("kind") == "merge":
+                    self.open_merge(info["left"], info.get("base") or None, info["right"], info.get("output"))
+                else:
+                    self.open_compare(info["kind"], info["left"], info["right"], info.get("extra"))
+                n += 1
+            except Exception:
+                continue
+        if n:
+            self.tabs.setCurrentIndex(1)
+        return n
+
     def closeEvent(self, e):
         if not self.tool_mode:
             for i in range(self.tabs.count() - 1, 0, -1):
@@ -703,6 +742,8 @@ class MainWindow(QMainWindow):
                         e.ignore()
                         return
                     break
+        if not self.tool_mode and self.cfg["restore_tabs"]:
+            self.save_open_tabs()
         for i in range(self.tabs.count() - 1, 0, -1):
             w = self.tabs.widget(i)
             if hasattr(w, "cancel_work"):

@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QFileDialog, QFrame, QHBoxLayo
 
 from . import engine, foldermerge, theme, vfs
 from .text_view import EditDialog
-from .widgets import ToolbarAdapter, sty, toast, LinesWidget, Pill, Row, Segmented, tool_button, vsep
+from .widgets import ToolbarAdapter, pick_folder, sty, toast, LinesWidget, Pill, Row, Segmented, tool_button, vsep
 from .workers import TaskWorker
 
 
@@ -557,9 +557,9 @@ class FolderMergeView(QWidget):
         root.addWidget(foot)
 
     def _browse_out(self):
-        d = QFileDialog.getExistingDirectory(self, "Output folder", self.output)
+        d = pick_folder(self, "Output folder", self.output)
         if d:
-            self.out_edit.setText(os.path.normpath(d))
+            self.out_edit.setText(d)
 
     # ----------------------------------------------------------------- data
     def scan(self):

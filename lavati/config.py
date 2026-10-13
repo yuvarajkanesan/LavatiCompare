@@ -31,7 +31,9 @@ DEFAULTS = {
     "text_layout": "side",            # side | over
     "file_formats": [],               # per-file-type rules, see fileformats.py
     "sync_sessions": [],              # saved synchronisation presets
-    "sync_backup_dir": "",            # "" = .lavati-backup inside the destination root
+    "sync_backup_dir": "",
+    "restore_tabs": True,             # reopen the tabs that were open when the app was closed
+    "open_tabs": [],            # "" = .lavati-backup inside the destination root
 }
 
 

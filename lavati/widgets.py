@@ -379,6 +379,62 @@ class ToolbarAdapter(QObject):
                 b.setMinimumWidth(40 if want else 54)
 
 
+_last_dir = [""]
+
+
+def _start_dir(start):
+    """Where a file dialog should open: the typed path if it exists, else the last folder used."""
+    import os
+    if start:
+        p = start
+        while p and not os.path.isdir(p):
+            parent = os.path.dirname(p)
+            if parent == p:
+                break
+            p = parent
+        if p and os.path.isdir(p):
+            return p
+    return _last_dir[0]
+
+
+def pick_folder(parent, title="Select folder", start=""):
+    import os
+    from PySide6.QtWidgets import QFileDialog
+    p = QFileDialog.getExistingDirectory(parent, title, _start_dir(start))
+    if p:
+        _last_dir[0] = os.path.dirname(os.path.normpath(p)) or p
+    return os.path.normpath(p) if p else ""
+
+
+def pick_file(parent, title="Select file", start="", filters=""):
+    import os
+    from PySide6.QtWidgets import QFileDialog
+    p, _ = QFileDialog.getOpenFileName(parent, title, _start_dir(start), filters)
+    if p:
+        _last_dir[0] = os.path.dirname(os.path.normpath(p))
+    return os.path.normpath(p) if p else ""
+
+
+def split_browse_button(on_click, menu_items, height=42, text="Browse", width=None):
+    """'Browse' button: clicking opens the default dialog at once; the arrow offers the alternatives."""
+    b = QToolButton()
+    b.setText(text)
+    b.setToolButtonStyle(Qt.ToolButtonTextOnly)
+    b.setPopupMode(QToolButton.MenuButtonPopup)
+    b.setCursor(Qt.PointingHandCursor)
+    b.setFixedHeight(height)
+    b.setMinimumWidth(width or 92)
+    b.setStyleSheet(f"QToolButton {{ background:{theme.BTN}; border:1px solid {theme.BORDER}; border-radius:8px; padding:0 26px 0 14px; color:{theme.TEXT}; }}"
+                    f"QToolButton:hover {{ background:{theme.HOVER}; border-color:{theme.ACCENT}; }}"
+                    f"QToolButton::menu-button {{ border:none; border-left:1px solid {theme.BORDER}; width:22px; }}")
+    b.clicked.connect(on_click)
+    m = QMenu(b)
+    for label, fn in menu_items:
+        m.addAction(label, fn)
+    b.setMenu(m)
+    return b
+
+
 def vsep():
     f = QFrame()
     f.setFixedWidth(1)

@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog,
                                QTableWidget, QTableWidgetItem, QVBoxLayout)
 
 from . import gitvfs, theme
+from .widgets import pick_folder
 
 SOURCES = [("worktree", "Working tree"), ("index", "Staged changes (index)"), ("head", "HEAD"), ("branch", "Branch"),
            ("remote", "Remote branch"), ("tag", "Tag"), ("commit", "Commit / revision"), ("stash", "Stash")]
@@ -219,7 +220,7 @@ class GitCompareDialog(QDialog):
         self._repo_changed()
 
     def _browse(self):
-        d = QFileDialog.getExistingDirectory(self, "Repository folder", self.repo.text())
+        d = pick_folder(self, "Repository folder", self.repo.text())
         if d:
             self.repo.setText(os.path.normpath(d))
             self._repo_changed()

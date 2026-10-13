@@ -3,7 +3,7 @@ import os
 import sys
 import time
 
-from PySide6.QtCore import QSize, Qt, QThread, QUrl, Signal
+from PySide6.QtCore import QEvent, QSize, Qt, QThread, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
                                QFileDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QInputDialog,
@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QCheckBox, QComb
 
 from . import (config, connect_dialog, engine, fileformats, gitvfs, highlight, platform_utils, regcmp, script, shell,
                textdialogs, theme, vfs)
-from .widgets import sty, toast, Pill, card
+from .widgets import Pill, card, pick_file, pick_folder, split_browse_button, sty, toast
 
 KINDS = {
     "folder": ("Folder Compare", "Folders, archives, snapshots and servers. Sync and filter by status.", "folder", "#e3e7fb", theme.ACCENT),
@@ -134,9 +134,11 @@ def human_time(ts):
 
 
 class PathBox(QWidget):
-    """Line edit + Browse button (file, folder, archive, server or registry key)."""
+    """Line edit + Browse. Browse opens the right dialog immediately; the arrow lists the alternatives.
 
-    def __init__(self, folder_ok=True, parent=None, registry=False):
+    default: "file", "folder", or "auto" (match whatever the partner box holds, else a file)."""
+
+    def __init__(self, folder_ok=True, parent=None, registry=False, default="auto"):
         super().__init__(parent)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -144,32 +146,31 @@ class PathBox(QWidget):
         self.edit = QLineEdit()
         self.edit.setProperty("mono", True)
         self.edit.setFixedHeight(42)
-        self.btn = QPushButton("Browse")
-        self.btn.setFixedHeight(42)
-        self.btn.clicked.connect(self.browse)
-        lay.addWidget(self.edit, 1)
-        lay.addWidget(self.btn)
         self.folder_ok = folder_ok
         self.registry = registry
+        self.default = default
+        self.partner = None
+        items = [("Choose file…", lambda: self._pick(False))]
+        if folder_ok:
+            items += [("Choose folder…", lambda: self._pick(True)), ("Connect to a server…", self._connect)]
+        if registry and sys.platform == "win32":
+            items.append(("Registry key…", self._registry))
+        self.btn = split_browse_button(self.browse, items)
+        lay.addWidget(self.edit, 1)
+        lay.addWidget(self.btn)
 
     def browse(self):
-        m = QMenu(self)
-        m.addAction("Choose file…", lambda: self._pick(False))
-        if self.folder_ok:
-            m.addAction("Choose folder…", lambda: self._pick(True))
-            m.addAction("Connect to a server…", self._connect)
-        if self.registry and sys.platform == "win32":
-            m.addAction("Registry key…", self._registry)
-        m.exec(self.btn.mapToGlobal(self.btn.rect().bottomLeft()))
+        want_folder = self.default == "folder"
+        if self.default == "auto" and self.folder_ok:
+            other = self.partner.text() if self.partner is not None else ""
+            want_folder = bool(other) and (os.path.isdir(other) or vfs.is_remote_spec(other))
+        self._pick(want_folder and self.folder_ok)
 
     def _pick(self, folder):
-        start = self.edit.text() or ""
-        if folder:
-            p = QFileDialog.getExistingDirectory(self, "Select folder", start)
-        else:
-            p, _ = QFileDialog.getOpenFileName(self, "Select file", start)
+        start = self.edit.text() or (self.partner.text() if self.partner is not None else "")
+        p = pick_folder(self, "Select folder", start) if folder else pick_file(self, "Select file", start)
         if p:
-            self.edit.setText(os.path.normpath(p))
+            self.edit.setText(p)
 
     def _connect(self):
         dlg = connect_dialog.ConnectDialog(self)
@@ -214,10 +215,12 @@ class PickDialog(QDialog):
         for i, lab in enumerate(labels):
             l = QLabel(lab)
             l.setStyleSheet(f"color:{theme.MUTED}; font-weight:700; font-size:8pt; letter-spacing:1px;")
-            b = PathBox(folder_ok, registry=(kind == "registry"))
+            b = PathBox(folder_ok, registry=(kind == "registry"), default="folder" if kind == "folder" else ("auto" if kind == "merge" else "file"))
             lay.addWidget(l)
             lay.addWidget(b)
             self.boxes.append(b)
+        for i, b in enumerate(self.boxes):
+            b.partner = self.boxes[0] if i else (self.boxes[1] if len(self.boxes) > 1 else None)
         if kind != "merge":
             self.boxes[0].setText(left)
             self.boxes[1].setText(right)
@@ -622,7 +625,9 @@ class HomePage(QWidget):
         top.addStretch(1)
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search sessions, paths...")
-        self.search.setFixedSize(396, 58)
+        self.search.setFixedHeight(58)
+        self.search.setMinimumWidth(240)
+        self.search.setMaximumWidth(396)
         self.search.setStyleSheet(f"padding-left:8px; padding-right:60px; font-size:11pt; background:{theme.PANEL};")
         self.search.addAction(theme.icon("search", theme.MUTED, 18), QLineEdit.LeadingPosition)
         self.search.textChanged.connect(lambda t: self.recent.populate(t))
@@ -630,7 +635,9 @@ class HomePage(QWidget):
         kb.setFont(theme.mono(8))
         kb.setStyleSheet(f"color:{theme.MUTED}; border:1px solid {theme.BORDER}; border-radius:4px; padding:1px 6px; background:{theme.BTN};")
         kb.adjustSize()
-        kb.move(396 - kb.width() - 16, (58 - kb.height()) // 2)
+        self._kb = kb
+        self.search.installEventFilter(self)
+        kb.move(self.search.width() - kb.width() - 16, (58 - kb.height()) // 2)
         top.addWidget(self.search, 0, Qt.AlignTop)
         lay.addLayout(top)
         lay.addSpacing(26)
@@ -659,23 +666,24 @@ class HomePage(QWidget):
                 v.addSpacing(26)
                 v.addWidget(sw)
                 row.addLayout(v)
+        bl.addLayout(row)
         go = QPushButton("Compare  ")
         go.setIcon(theme.icon("right", theme.PANEL, 18))
         go.setLayoutDirection(Qt.RightToLeft)
         go.setProperty("primary", True)
-        go.setFixedSize(180, 58 - 16)
+        go.setFixedSize(170, 40)
         go.clicked.connect(self._go)
-        v = QVBoxLayout()
-        v.addSpacing(26)
-        v.addWidget(go)
-        row.addLayout(v)
-        bl.addLayout(row)
         self.detected = QLabel()
         self.detected.setTextFormat(Qt.RichText)
         self.detected.setStyleSheet("border:none;")
+        self.detected.setWordWrap(True)
         self.detected.linkActivated.connect(lambda _: self.show_page(2))
-        bl.addWidget(self.detected)
+        foot = QHBoxLayout()
+        foot.addWidget(self.detected, 1)
+        foot.addWidget(go)
+        bl.addLayout(foot)
         lay.addWidget(bar)
+        self.p_left.partner, self.p_right.partner = self.p_right, self.p_left
         for b in (self.p_left, self.p_right):
             b.edit.textChanged.connect(self._detect)
             b.edit.returnPressed.connect(self._go)
@@ -685,13 +693,12 @@ class HomePage(QWidget):
         h.setStyleSheet("font-size:13pt; font-weight:700; background:transparent;")
         lay.addWidget(h)
         lay.addSpacing(10)
-        grid = QGridLayout()
-        grid.setSpacing(12)
-        for i, (k, (title, desc, ic, bg, fg)) in enumerate(KINDS.items()):
-            grid.addWidget(self._kind_card(k, title, desc, ic, bg, fg), i // 4, i % 4)
-        for c in range(4):
-            grid.setColumnStretch(c, 1)
-        lay.addLayout(grid)
+        self.card_grid = QGridLayout()
+        self.card_grid.setSpacing(12)
+        self.cards = [self._kind_card(k, title, desc, ic, bg, fg) for k, (title, desc, ic, bg, fg) in KINDS.items()]
+        self._cols = 0
+        self._layout_cards(4)
+        lay.addLayout(self.card_grid)
         lay.addSpacing(28)
 
         rh = QHBoxLayout()
@@ -745,6 +752,28 @@ class HomePage(QWidget):
         lay.addLayout(col, 1)
         f.clicked.connect(lambda: self.kindRequested.emit(kind))
         return f
+
+    def _layout_cards(self, cols):
+        """Re-flow the session cards: as many columns as the width allows (2 to 4)."""
+        if cols == self._cols:
+            return
+        self._cols = cols
+        for c in self.cards:
+            self.card_grid.removeWidget(c)
+        for i, c in enumerate(self.cards):
+            self.card_grid.addWidget(c, i // cols, i % cols)
+        for c in range(6):
+            self.card_grid.setColumnStretch(c, 1 if c < cols else 0)
+
+    def eventFilter(self, obj, ev):
+        if obj is getattr(self, "search", None) and ev.type() == QEvent.Resize and hasattr(self, "_kb"):
+            self._kb.move(self.search.width() - self._kb.width() - 16, (self.search.height() - self._kb.height()) // 2)
+        return super().eventFilter(obj, ev)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        avail = self.width() - 334 - 96            # sidebar + page margins
+        self._layout_cards(max(2, min(4, avail // 235)))
 
     def _swap(self):
         a, b = self.p_left.text(), self.p_right.text()
@@ -1068,7 +1097,8 @@ class HomePage(QWidget):
         cl.setSpacing(12)
         self.s_backup = QCheckBox("Back up overwritten and deleted files by default")
         self.s_recycle = QCheckBox("Use Recycle Bin / Trash for deletes by default")
-        for cb, key in ((self.s_backup, "backup_overwritten"), (self.s_recycle, "use_recycle_bin")):
+        self.s_restore = QCheckBox("Reopen the tabs that were open when I last closed the app")
+        for cb, key in ((self.s_backup, "backup_overwritten"), (self.s_recycle, "use_recycle_bin"), (self.s_restore, "restore_tabs")):
             cb.setChecked(bool(self.cfg[key]))
             cb.setStyleSheet("border:none;")
             cb.toggled.connect(lambda on, k=key: self.cfg.__setitem__(k, on))

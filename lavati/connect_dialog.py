@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QDialogButtonBo
                                QVBoxLayout, QWidget)
 
 from . import remote, theme, vfs
+from .widgets import pick_file
 
 TYPES = [
     ("ftp", "FTP", "Plain FTP (no encryption)"),
@@ -142,7 +143,7 @@ class ConnectDialog(QDialog):
         return d
 
     def _pick_key(self, edit):
-        p, _ = QFileDialog.getOpenFileName(self, "Private key file")
+        p = pick_file(self, "Private key file", edit.text())
         if p:
             edit.setText(p)
 

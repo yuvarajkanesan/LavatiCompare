@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QCheckBox, QDial
 
 from . import config, engine, fsops, platform_utils, theme
 from .fsops import MODES, build_plan, plan_summary
-from .widgets import Pill, sty, toast
+from .widgets import Pill, pick_folder, sty, toast
 from .workers import TaskWorker
 
 MAX_ROWS = 3000
@@ -279,7 +279,7 @@ class SyncDialog(QDialog):
         self.b_bdir.customContextMenuRequested.connect(lambda *_: (setattr(self, "backup_dir", ""), self._bdir_label()))
 
     def _pick_backup_dir(self):
-        d = QFileDialog.getExistingDirectory(self, "Backup folder", self.backup_dir or "")
+        d = pick_folder(self, "Backup folder", self.backup_dir)
         if d:
             self.backup_dir = os.path.normpath(d)
             self._bdir_label()

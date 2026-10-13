@@ -34,6 +34,81 @@ def _pop_option(args, name, nargs=1):
     return None
 
 
+def selftest():
+    """Exercise every bundled component once (used to prove a packaged build is complete)."""
+    import io
+    import tempfile
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    ok = True
+
+    def check(name, fn):
+        nonlocal ok
+        try:
+            fn()
+            print(f"ok    {name}")
+        except Exception as e:
+            ok = False
+            print(f"FAIL  {name}: {type(e).__name__}: {e}")
+
+    def qt():
+        from PySide6.QtGui import QImage
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance() or QApplication([])
+        from lavati import theme
+        assert not theme.icon("folder", "#000000", 20).isNull()
+        assert not theme.logo_pixmap(64).isNull()
+        d = tempfile.mkdtemp()
+        from PIL import Image
+        for ext in ("png", "jpg", "gif", "bmp"):
+            p = os.path.join(d, "t." + ext)
+            Image.new("RGB", (8, 8), (200, 10, 10)).save(p)
+            assert not QImage(p).isNull(), ext
+
+    def xl():
+        import openpyxl
+        from lavati import engine
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "a.xlsx")
+        wb = openpyxl.Workbook()
+        wb.active.append(["k", "v"])
+        wb.active.append(["a", 1])
+        wb.save(p)
+        assert engine.load_table(p) == (["k", "v"], [["a", "1"]])
+
+    def pdf():
+        import pypdfium2
+        assert pypdfium2.PdfDocument
+
+    def ssh():
+        import paramiko
+        from cryptography.hazmat.primitives import hashes
+        assert paramiko.SSHClient and hashes.SHA256
+
+    def zips():
+        from lavati import vfs
+        import zipfile
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "a.zip")
+        with zipfile.ZipFile(p, "w") as z:
+            z.writestr("x/y.txt", "hi")
+        fs, root = vfs.open_location(p)
+        assert fs.scandir(root)[0].name == "x"
+
+    def tls():
+        import ssl
+        import urllib.request
+        assert ssl.create_default_context()
+
+    check("Qt widgets, SVG icons and image codecs", qt)
+    check("Excel (openpyxl)", xl)
+    check("PDF text (pypdfium2)", pdf)
+    check("SFTP (paramiko + cryptography)", ssh)
+    check("archives", zips)
+    check("TLS / downloads", tls)
+    print("SELFTEST " + ("PASSED" if ok else "FAILED"))
+    return 0 if ok else 1
+
+
 def headless(args):
     """Commands that need no window. Returns an exit code or None when the arguments are not headless."""
     from lavati import script
@@ -82,6 +157,8 @@ def headless(args):
         else:
             text = f'file-report "{left}" "{right}" output-to:"{out}" format={fmt}\n'
         return script.ScriptRunner().run(text)
+    if cmd == "--selftest":
+        return selftest()
     if cmd in ("--version", "-v"):
         from lavati import __version__
         print(VERSION_TEXT.format(__version__))
@@ -223,6 +300,8 @@ def main(argv):
             win.home.set_paths(l, r)
             win.show_toast(label, "warn")
         # `git difftool` and friends wait for the process: a lone compare window is fine, the user closes it
+    if not args0 and cfg["restore_tabs"]:
+        win.restore_tabs()
     rc = app.exec()
     if tool:
         return 0 if win.merge_saved else 1       # git (trustExitCode) must not accept an unsaved merge

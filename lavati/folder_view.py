@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDateTimeEdit, QDia
 
 from . import connect_dialog, engine, fsops, gitvfs, platform_utils, remote, reports, theme, vfs
 from .textdialogs import RulesDialog
-from .widgets import ToolbarAdapter, Segmented, sty, toast, tool_button, vsep
+from .widgets import Segmented, ToolbarAdapter, pick_file, pick_folder, split_browse_button, sty, toast, tool_button, vsep
 from .workers import TaskWorker
 
 STATUS_TEXT = {"changed": "Different", "newer": "Left is newer", "older": "Left is older", "left": "Left only",
@@ -363,12 +363,11 @@ class FolderCompareView(QWidget):
             l.setStyleSheet(f"color:{theme.MUTED}; font-weight:700; font-size:8pt; letter-spacing:1px;")
             pl.addWidget(l)
             pl.addWidget(le, 1)
-            b = QPushButton()
-            b.setIcon(theme.icon("folder", theme.TEXT, 18))
-            b.setProperty("plain", True)
-            b.setFixedWidth(44)
-            b.setToolTip("Browse, open an archive or snapshot, or connect to a server")
-            b.clicked.connect(lambda _=False, s=side, w=b: self.browse(s, w))
+            b = split_browse_button(lambda s=side: self._browse_folder(s),
+                                    [("Folder…", lambda s=side: self._browse_folder(s)),
+                                     ("Archive or snapshot file…", lambda s=side: self._browse_file(s)),
+                                     ("Connect to a server…", lambda s=side: self._connect(s))], height=34, width=84)
+            b.setToolTip("Choose a folder (use the arrow for an archive, snapshot or server)")
             pl.addWidget(b)
             if side == "L":
                 pl.addSpacing(18)
@@ -484,15 +483,16 @@ class FolderCompareView(QWidget):
 
     def _browse_folder(self, side):
         cur = (self.le_left if side == "L" else self.le_right).text()
-        d = QFileDialog.getExistingDirectory(self, "Select folder", cur if os.path.isdir(cur) else "")
+        d = pick_folder(self, "Select folder", cur)
         if d:
-            self._set_path(side, os.path.normpath(d))
+            self._set_path(side, d)
 
     def _browse_file(self, side):
-        p, _ = QFileDialog.getOpenFileName(self, "Open archive or snapshot", "",
-                                           "Archives and snapshots (*.zip *.jar *.war *.apk *.aar *.tar *.tgz *.gz *.bz2 *.xz *.whl *.lsnap);;All files (*)")
+        cur = (self.le_left if side == "L" else self.le_right).text()
+        p = pick_file(self, "Open archive or snapshot", cur,
+                      "Archives and snapshots (*.zip *.jar *.war *.apk *.aar *.tar *.tgz *.gz *.bz2 *.xz *.whl *.lsnap);;All files (*)")
         if p:
-            self._set_path(side, os.path.normpath(p))
+            self._set_path(side, p)
 
     def _connect(self, side):
         dlg = connect_dialog.ConnectDialog(self, "left" if side == "L" else "right")
@@ -1141,7 +1141,7 @@ class FolderCompareView(QWidget):
                        "Snapshot saved ({n} entries)")
 
     def load_snapshot(self, side):
-        p, _ = QFileDialog.getOpenFileName(self, "Open snapshot", "", "Lavati snapshot (*.lsnap)")
+        p = pick_file(self, "Open snapshot", "", "Lavati snapshot (*.lsnap)")
         if p:
             self._set_path(side, os.path.normpath(p))
 

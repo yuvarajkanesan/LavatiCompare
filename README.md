@@ -77,3 +77,14 @@ Windows: `build.bat` (PyInstaller, plus an installer when Inno Setup is present)
 (`lavati.spec`; on Apple Silicon the app is native arm64, `LAVATI_ARCH=universal2` for a universal build).
 
 Settings and sessions live in `%APPDATA%\LavatiCompare` (`~/Library/Application Support/LavatiCompare`, `~/.config/LavatiCompare`).
+
+## Safety
+- Nothing is changed on disk until you copy, sync or save; deletes can go to the Recycle Bin and overwritten files can be backed up first.
+- Downloads (portable Git) are verified against the publisher's SHA-256 before use; passwords are never written to disk;
+  SFTP host keys must be confirmed; redirects never forward credentials to another host.
+- The Windows installer is not code-signed yet, so SmartScreen may warn on first run. Maintainers can sign builds by
+  setting `LAVATI_SIGNTOOL` before `build.bat` (see the comment there); open-source projects can apply for free signing
+  through [SignPath Foundation](https://signpath.org/).
+
+## License
+Free and open source under the [MIT License](LICENSE.txt). Copyright (c) 2026 Lavati Softwares.

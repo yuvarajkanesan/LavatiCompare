@@ -100,6 +100,33 @@ class DropOverlay(QWidget):
         p.drawText(r.adjusted(0, 50, 0, 50), Qt.AlignCenter, "Three items open a merge · release to start")
 
 
+def license_text():
+    """The MIT text shipped next to the program (or in the source tree)."""
+    import sys
+    base = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.dirname(__file__))
+    try:
+        with open(os.path.join(base, "LICENSE.txt"), encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return "MIT License. Copyright (c) 2026 Lavati Softwares.\nSee https://opensource.org/licenses/MIT"
+
+
+class LicenseDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("License")
+        self.resize(560, 440)
+        lay = QVBoxLayout(self)
+        from PySide6.QtWidgets import QPlainTextEdit
+        t = QPlainTextEdit(license_text())
+        t.setReadOnly(True)
+        lay.addWidget(t)
+        ok = QPushButton("Close")
+        ok.setProperty("primary", True)
+        ok.clicked.connect(self.accept)
+        lay.addWidget(ok)
+
+
 class AboutDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -123,7 +150,7 @@ class AboutDialog(QDialog):
         d = QLabel("Folder, text, table, binary, picture, media, version and registry\ncomparison with merge, synchronisation and scripting.")
         d.setAlignment(Qt.AlignCenter)
         d.setStyleSheet(f"color:{theme.MUTED};")
-        c = QLabel("© Lavati. All rights reserved.\nBuilt with Python and Qt (PySide6).")
+        c = QLabel("Copyright (c) 2026 Lavati Softwares. Free and open source (MIT License).\nBuilt with Python and Qt (PySide6).")
         c.setAlignment(Qt.AlignCenter)
         c.setStyleSheet(f"color:{theme.MUTED}; font-size:9pt;")
         for w in (t, v):
@@ -132,12 +159,18 @@ class AboutDialog(QDialog):
         lay.addWidget(d)
         lay.addStretch(1)
         lay.addWidget(c)
+        row = QHBoxLayout()
+        lic = QPushButton("License (MIT)")
+        lic.setMinimumHeight(36)
+        lic.clicked.connect(lambda: LicenseDialog(self).exec())
         ok = QPushButton("Close")
         ok.setProperty("primary", True)
         ok.setMinimumHeight(36)
         ok.clicked.connect(self.accept)
+        row.addWidget(lic)
+        row.addWidget(ok)
         lay.addSpacing(10)
-        lay.addWidget(ok)
+        lay.addLayout(row)
 
 
 class ShortcutsDialog(QDialog):

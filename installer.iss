@@ -8,7 +8,12 @@ AppId={{8F5B6A1E-4C0D-4C77-9B7A-1A7E5E0C1A11}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher=Lavati Softwares
-AppCopyright=Copyright (C) Lavati Softwares
+AppCopyright=Copyright (c) 2026 Lavati Softwares (MIT License)
+LicenseFile=installer\EULA.txt
+#ifdef Sign
+SignTool=lavatisign $f
+SignedUninstaller=yes
+#endif
 VersionInfoCompany=Lavati Softwares
 VersionInfoDescription=Lavati Compare Setup
 VersionInfoProductName=Lavati Compare
@@ -56,6 +61,7 @@ Name: "explorer"; Description: "Add ""Select as left side"" and ""Compare to the
 
 [Files]
 Source: "dist\LavatiCompare\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"

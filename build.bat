@@ -26,8 +26,20 @@ set ISCC=
 if exist "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" set ISCC=%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe
 if exist "%ProgramFiles%\Inno Setup 6\ISCC.exe" set ISCC=%ProgramFiles%\Inno Setup 6\ISCC.exe
 if exist "%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" set ISCC=%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe
+rem --- code signing: removes the "Unknown publisher" warning ---
+rem Set SIGN_CERT_SHA1 to the thumbprint of a code-signing certificate that is in your Windows certificate store
+rem (optional SIGN_TIMESTAMP_URL), or set LAVATI_SIGNTOOL to a full command using $f for the file.
+if defined SIGN_CERT_SHA1 call :findsigntool
+if defined SIGN_CERT_SHA1 if defined SIGNTOOL_EXE call :makesigncmd
+if defined LAVATI_SIGNTOOL call :signapp || goto :err
+if defined LAVATI_SIGNTOOL call set ISIGN=%%LAVATI_SIGNTOOL:"=$q%%
+if defined LAVATI_SIGNTOOL (echo Signing enabled) else (echo Signing skipped: SIGN_CERT_SHA1 is not set - the installer will show Unknown publisher)
 if defined ISCC (
-  "%ISCC%" installer.iss || goto :err
+  if defined LAVATI_SIGNTOOL (
+    "%ISCC%" /DSign=1 "/Slavatisign=%ISIGN%" installer.iss || goto :err
+  ) else (
+    "%ISCC%" installer.iss || goto :err
+  )
   echo Installer: dist\LavatiCompare-Setup.exe
 ) else (
   echo Inno Setup not found - skipping installer. Install it from https://jrsoftware.org/isdl.php and re-run.
@@ -36,3 +48,19 @@ exit /b 0
 :err
 echo Build failed.
 exit /b 1
+
+:findsigntool
+set SIGNTOOL_EXE=
+for /f "delims=" %%S in ('dir /b /s "%ProgramFiles(x86)%\Windows Kits\10\bin\signtool.exe" 2^>nul ^| findstr /i "\\x64\\"') do set SIGNTOOL_EXE=%%S
+exit /b 0
+
+:makesigncmd
+if not defined SIGN_TIMESTAMP_URL set SIGN_TIMESTAMP_URL=http://timestamp.digicert.com
+set LAVATI_SIGNTOOL="%SIGNTOOL_EXE%" sign /sha1 %SIGN_CERT_SHA1% /fd sha256 /tr %SIGN_TIMESTAMP_URL% /td sha256 /d "Lavati Compare" $f
+exit /b 0
+
+:signapp
+call set SIGNCMD=%%LAVATI_SIGNTOOL:$f=dist\LavatiCompare\LavatiCompare.exe%%
+%SIGNCMD%
+exit /b %errorlevel%
+exit /b 0

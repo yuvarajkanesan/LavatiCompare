@@ -1,4 +1,4 @@
-Lavati Compare compares folders, text, tables, binaries, pictures, media tags, version info, the registry, documents and Git revisions, and merges and synchronises them.
+Lavati Compare is free and open source software (MIT license). It compares folders, text, tables, binaries, pictures, media tags, version info, the registry, documents and Git revisions, and merges and synchronises them.
 
 Nothing else needs to be installed first. Optional extras, such as a portable Git, are downloaded by the app only when you ask for them.
 

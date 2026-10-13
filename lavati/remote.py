@@ -107,7 +107,7 @@ def http_request(method, url, headers=None, data=None, timeout=60, follow=True, 
     last = None
     for attempt in range(retries + 1):
         req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
-        opener = urllib.request.build_opener() if follow else urllib.request.build_opener(_NoRedirect)
+        opener = urllib.request.build_opener(_SafeRedirect) if follow else urllib.request.build_opener(_NoRedirect)
         try:
             with opener.open(req, timeout=timeout) as r:
                 return r.status, dict(r.headers), r.read()
@@ -135,10 +135,34 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+class _SafeRedirect(urllib.request.HTTPRedirectHandler):
+    """Follow redirects, but never carry credentials to another host or down to plain http."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is None:
+            return None
+        old_u, new_u = urllib.parse.urlparse(req.full_url), urllib.parse.urlparse(newurl)
+        if old_u.scheme == "https" and new_u.scheme != "https":
+            return None                                          # no https -> http downgrade
+        if (old_u.hostname or "").lower() != (new_u.hostname or "").lower() or old_u.scheme != new_u.scheme:
+            for k in list(new.headers):
+                if k.lower() in ("authorization", "cookie", "proxy-authorization"):
+                    del new.headers[k]
+            for k in list(new.unredirected_hdrs):
+                if k.lower() in ("authorization", "cookie", "proxy-authorization"):
+                    del new.unredirected_hdrs[k]
+        return new
+
+
+def _is_loopback(host):
+    return (host or "").lower() in ("localhost", "127.0.0.1", "::1")
+
+
 def http_download(url, headers, local, method="GET", data=None, timeout=120, strip_auth_on_redirect=True):
     """Stream a response body to `local`. Returns (status, headers)."""
     req = urllib.request.Request(url, data=data, headers=dict(headers or {}), method=method)
-    opener = urllib.request.build_opener(_NoRedirect) if strip_auth_on_redirect else urllib.request.build_opener()
+    opener = urllib.request.build_opener(_NoRedirect) if strip_auth_on_redirect else urllib.request.build_opener(_SafeRedirect)
     try:
         r = opener.open(req, timeout=timeout)
     except urllib.error.HTTPError as e:
@@ -154,6 +178,13 @@ def http_download(url, headers, local, method="GET", data=None, timeout=120, str
     with r, open(local, "wb") as out:
         shutil.copyfileobj(r, out, vfs.CHUNK)
         return r.status, dict(r.headers)
+
+
+def refuse_cleartext_login(url, what="password"):
+    """A password must not cross the network unencrypted (loopback is fine: nothing leaves the machine)."""
+    u = urllib.parse.urlparse(url)
+    if u.scheme == "http" and not _is_loopback(u.hostname):
+        raise RemoteError(f"Refusing to send a {what} over plain http. Use an https:// address.")
 
 
 # =============================================================== base class
@@ -585,6 +616,7 @@ class WebDAVFS(RemoteFS):
         self.user, self.password = user, password
         self._auth = None
         if user is not None and password is not None:
+            refuse_cleartext_login(base_url)
             self._auth = "Basic " + base64.b64encode(f"{user}:{password}".encode()).decode()
         self._digest_opener = None
         self._probe()

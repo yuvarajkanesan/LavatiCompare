@@ -77,13 +77,25 @@ def download_git(progress=None):
             rel = json.load(r)
         arch = "arm64" if "ARM" in os.environ.get("PROCESSOR_ARCHITECTURE", "").upper() else "64-bit"
         asset = next(a for a in rel["assets"] if re.fullmatch(rf"MinGit-[\d.]+-{arch}\.zip", a["name"]))
+        url = asset["browser_download_url"]
+        if not url.startswith("https://github.com/git-for-windows/git/releases/download/"):
+            raise ValueError("unexpected download address")
+        # integrity: GitHub publishes a SHA-256 for each release asset; fall back to the one in the release notes
+        want = (asset.get("digest") or "").removeprefix("sha256:").lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", want):
+            m = re.search(rf"{re.escape(asset['name'])}\s*\|?\s*([0-9a-fA-F]{{64}})", rel.get("body") or "")
+            want = m.group(1).lower() if m else ""
+        if not want:
+            raise ValueError("no checksum is published for this download")
     except (OSError, StopIteration, ValueError, KeyError) as e:
         raise GitError(f"Could not find the Git download online: {e}") from e
     dest = os.path.join(tools_dir(), "mingit")
     os.makedirs(tools_dir(), exist_ok=True)
     tmp_zip = os.path.join(tools_dir(), asset["name"] + ".part")
     try:
-        req = urllib.request.Request(asset["browser_download_url"], headers={"User-Agent": "LavatiCompare"})
+        import hashlib
+        h = hashlib.sha256()
+        req = urllib.request.Request(url, headers={"User-Agent": "LavatiCompare"})
         with urllib.request.urlopen(req, timeout=60) as r, open(tmp_zip, "wb") as f:
             total, done = int(r.headers.get("Content-Length") or 0), 0
             while True:
@@ -91,9 +103,14 @@ def download_git(progress=None):
                 if not b:
                     break
                 f.write(b)
+                h.update(b)
                 done += len(b)
+                if done > 400 * 1024 * 1024:
+                    raise GitError("The download is unexpectedly large")
                 if progress:
                     progress(done, total)
+        if h.hexdigest() != want:
+            raise GitError("The downloaded Git failed its integrity check and was discarded")
         shutil.rmtree(dest, ignore_errors=True)
         root = os.path.realpath(dest)
         with zipfile.ZipFile(tmp_zip) as z:
@@ -120,10 +137,13 @@ def run(repo, *args, input=None, check=True, text=False):
     exe = git_path()
     if not exe:
         raise GitError("Git is not available. Use 'Download Git' in the Git dialog or Settings (no installation needed).")
-    cmd = [exe, "-c", "core.quotepath=off", "-C", repo, *args]
+    # A repository can carry its own config; never let an untrusted one run programs or prompt for credentials.
+    cmd = [exe, "-c", "core.quotepath=off", "-c", "core.fsmonitor=false", "-c", "core.sshCommand=ssh",
+           "-c", "protocol.ext.allow=never", "-c", "diff.external=", "-C", repo, *args]
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0", GIT_EXTERNAL_DIFF="")
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
-        r = subprocess.run(cmd, input=input, capture_output=True, timeout=300, creationflags=flags)
+        r = subprocess.run(cmd, input=input, capture_output=True, timeout=300, creationflags=flags, env=env)
     except (OSError, subprocess.TimeoutExpired) as e:
         raise GitError(f"git failed: {e}") from e
     if check and r.returncode != 0:
@@ -209,8 +229,16 @@ def current_branch(repo):
     return "" if b in ("", "HEAD") else b          # '' = detached
 
 
+def safe_rev(rev):
+    """Reject revision strings git would read as options or that could span several arguments."""
+    if not rev or rev.startswith("-") or any(c in rev for c in "\0\r\n"):
+        raise GitError(f"'{rev}' is not a valid branch, tag or commit name")
+    return rev
+
+
 def log(repo, rev="HEAD", limit=500, path=None):
     """[(sha, short, author, iso date, subject, parents)]"""
+    safe_rev(rev)
     fmt = "%H%x1f%an%x1f%aI%x1f%s%x1f%P"
     args = ["log", f"--format={fmt}", f"-n{limit}", rev, "--"]
     if path:
@@ -224,6 +252,7 @@ def log(repo, rev="HEAD", limit=500, path=None):
 
 
 def merge_base(repo, a, b):
+    safe_rev(a), safe_rev(b)
     r = run(repo, "merge-base", a, b, text=True, check=False).strip()
     if not r:
         raise GitError(f"{a} and {b} have no common ancestor")
@@ -231,17 +260,19 @@ def merge_base(repo, a, b):
 
 
 def resolve(repo, rev):
+    safe_rev(rev)
     return run(repo, "rev-parse", "--verify", "--quiet", rev + "^{commit}", text=True, check=False).strip()
 
 
 def commit_time(repo, rev):
-    t = run(repo, "show", "-s", "--format=%ct", rev, text=True, check=False).strip()
+    t = run(repo, "show", "-s", "--format=%ct", safe_rev(rev), text=True, check=False).strip()
     return float(t) if t.isdigit() else 0.0
 
 
 def detect_renames(repo, a, b, similarity=50):
     """[(old path, new path)] for files git considers renamed between two revisions (-M)."""
-    out = run(repo, "diff", "--name-status", "-z", f"-M{similarity}%", a, b, text=True, check=False)
+    safe_rev(a), safe_rev(b)
+    out = run(repo, "diff", "--no-ext-diff", "--name-status", "-z", f"-M{int(similarity)}%", a, b, "--", text=True, check=False)
     parts = out.split("\0")
     pairs, i = [], 0
     while i < len(parts):
@@ -258,6 +289,9 @@ def detect_renames(repo, a, b, similarity=50):
 
 def detect_renames_specs(repo, a, b, similarity=50):
     """Rename pairs between any two sides (commit-ish, INDEX or WORKTREE)."""
+    for r in (a, b):
+        if r not in SPECIAL:
+            safe_rev(r)
     if a == "WORKTREE" or (a == "INDEX" and b not in ("WORKTREE",)):
         a, b = b, a                                    # git diff wants the older side first; the pairs are swapped back below
         swapped = True
@@ -379,7 +413,7 @@ class GitTreeFS(vfs.VFS):
             for path, sha, mode in rows:
                 self._add(path, sizes.get(sha, 0), sha, mode)
             return
-        out = run(self.repo, "ls-tree", "-r", "-l", "-z", self.rev, text=True)
+        out = run(self.repo, "ls-tree", "-r", "-l", "-z", safe_rev(self.rev), "--", text=True)
         for rec in out.split("\0"):
             if not rec:
                 continue

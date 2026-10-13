@@ -19,7 +19,11 @@ def _read_member(z, name):
     info = z.getinfo(name)
     if info.file_size > MAX_XML:
         raise ExtractError(f"{name} is too large to read")
-    return z.read(name)
+    with z.open(name) as f:
+        data = f.read(MAX_XML + 1)             # the header size can lie; bound what is actually inflated
+    if len(data) > MAX_XML:
+        raise ExtractError(f"{name} is too large to read")
+    return data
 
 
 def _parse(data):

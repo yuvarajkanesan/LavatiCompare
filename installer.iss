@@ -78,7 +78,7 @@ Root: HKCU; Subkey: "Software\Classes\Directory\shell\LavatiCompareWith\command"
 
 [UninstallDelete]
 ; everything the app creates besides the install folder
-Type: filesandordirs; Name: "{app}"
+Type: filesandordirs; Name: "{app}\_internal"
 Type: filesandordirs; Name: "{userappdata}\LavatiCompare"
 Type: filesandordirs; Name: "{localappdata}\LavatiCompare"
 
@@ -138,8 +138,10 @@ begin
     CleanGitConfig;
     DeleteTree(ExpandConstant('{userappdata}\LavatiCompare'));
     DeleteTree(ExpandConstant('{localappdata}\LavatiCompare'));
-    { the uninstaller lives inside the install folder, so remove whatever is left a moment after it exits }
-    Exec(ExpandConstant('{cmd}'), '/c ping 127.0.0.1 -n 3 >nul & rmdir /s /q "' + ExpandConstant('{app}') + '"', '', SW_HIDE, ewNoWait, Code);
+    { the uninstaller lives inside the install folder, so remove it a moment after it exits.
+      Only our own files go, and rmdir without /s only removes the folder when it is empty, so a
+      shared folder chosen at install time is never wiped. }
+    Exec(ExpandConstant('{cmd}'), '/c ping 127.0.0.1 -n 3 >nul & del /q "' + ExpandConstant('{app}') + '\unins*.*" & rmdir "' + ExpandConstant('{app}') + '"', '', SW_HIDE, ewNoWait, Code);
   end;
 end;
 

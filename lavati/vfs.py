@@ -372,8 +372,23 @@ class ArchiveFS(VFS):
         if ent.size > MAX_EXTRACT_BYTES:
             raise VFSError(f"{path}: too large to extract")
         dst = new_temp_path(self.basename(path))
-        with self.open(path) as src, open(dst, "wb") as out:
-            shutil.copyfileobj(src, out, CHUNK)
+        try:
+            with self.open(path) as src, open(dst, "wb") as out:
+                done = 0
+                while True:                      # the size in an archive header can lie, so count what really comes out
+                    b = src.read(CHUNK)
+                    if not b:
+                        break
+                    done += len(b)
+                    if done > MAX_EXTRACT_BYTES:
+                        raise VFSError(f"{path}: expands to more than the allowed size")
+                    out.write(b)
+        except VFSError:
+            try:
+                os.remove(dst)
+            except OSError:
+                pass
+            raise
         if ent.mtime:
             try:
                 os.utime(dst, (ent.mtime, ent.mtime))

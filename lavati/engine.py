@@ -254,7 +254,7 @@ def _binary_equal(lfs, lp, rfs, rp, ctx):
                 raise Cancelled()
 
 
-def _read_all(fs, path, limit=64 * 1024 * 1024):
+def _read_all(fs, path, limit=16 * 1024 * 1024):
     with fs.open(path) as f:
         data = f.read(limit + 1)
     return data if len(data) <= limit else None
@@ -604,6 +604,8 @@ def decode_bytes(raw, encoding=None):
 
 def read_text(path, encoding=None):
     """Return (text, encoding label, eol label)."""
+    if os.path.getsize(path) > MAX_TEXT_BYTES:
+        raise TooLarge(f"{os.path.basename(path)} is too large to open as text ({MAX_TEXT_BYTES >> 20} MB limit)")
     with open(path, "rb") as f:
         raw = f.read()
     return decode_bytes(raw, encoding)
@@ -619,8 +621,18 @@ class TextFile:
     final_newline: bool = True
 
 
+MAX_TEXT_BYTES = 300 * 1024 * 1024
+
+
+class TooLarge(Exception):
+    pass
+
+
 def load_text_file(path, encoding=None, raw=None):
     if raw is None:
+        if os.path.getsize(path) > MAX_TEXT_BYTES:
+            raise TooLarge(f"{os.path.basename(path)} is over {MAX_TEXT_BYTES >> 20} MB: too large for a line-by-line text "
+                           "view. Use Hex Compare, or a folder compare with the Binary method.")
         with open(path, "rb") as f:
             raw = f.read()
     text, enc, eol = decode_bytes(raw, encoding)
@@ -676,31 +688,84 @@ def line_key(s, ignore_ws, ignore_case=False):
 
 
 # =============================================================== text diff
-def _sm_opcodes(ka, kb):
-    """difflib opcodes with common prefix/suffix trimmed first (big speed-up for small edits)."""
-    n, m = len(ka), len(kb)
+SMALL_CHUNK = 4_000_000          # n*m below which plain difflib is fast enough
+
+
+def _lis_pairs(pairs):
+    """Longest run of (i, j) pairs, sorted by i, whose j also increases."""
+    import bisect
+    tails, idx, prev = [], [], [-1] * len(pairs)
+    for k, (_, j) in enumerate(pairs):
+        pos = bisect.bisect_left(tails, j)
+        if pos == len(tails):
+            tails.append(j)
+            idx.append(k)
+        else:
+            tails[pos] = j
+            idx[pos] = k
+        prev[k] = idx[pos - 1] if pos else -1
+    out, k = [], idx[-1] if idx else -1
+    while k >= 0:
+        out.append(pairs[k])
+        k = prev[k]
+    out.reverse()
+    return out
+
+
+def _diff_range(ka, kb, a0, a1, b0, b1, out, depth=0):
+    """Append difflib-style opcodes for ka[a0:a1] vs kb[b0:b1] to `out`, in order.
+
+    Big ranges are cut at lines that occur exactly once on each side (patience style) so the work stays
+    close to linear for huge files instead of quadratic."""
     pre = 0
-    while pre < n and pre < m and ka[pre] == kb[pre]:
+    while a0 + pre < a1 and b0 + pre < b1 and ka[a0 + pre] == kb[b0 + pre]:
         pre += 1
     suf = 0
-    while suf < n - pre and suf < m - pre and ka[n - 1 - suf] == kb[m - 1 - suf]:
+    while a0 + pre + suf < a1 and b0 + pre + suf < b1 and ka[a1 - 1 - suf] == kb[b1 - 1 - suf]:
         suf += 1
-    ops = []
     if pre:
-        ops.append(("equal", 0, pre, 0, pre))
-    ma, mb = ka[pre:n - suf], kb[pre:m - suf]
-    if ma or mb:
-        if not ma:
-            ops.append(("insert", pre, pre, pre, pre + len(mb)))
-        elif not mb:
-            ops.append(("delete", pre, pre + len(ma), pre, pre))
+        out.append(("equal", a0, a0 + pre, b0, b0 + pre))
+    x0, x1, y0, y1 = a0 + pre, a1 - suf, b0 + pre, b1 - suf
+    if x0 == x1 and y0 != y1:
+        out.append(("insert", x0, x0, y0, y1))
+    elif y0 == y1 and x0 != x1:
+        out.append(("delete", x0, x1, y0, y0))
+    elif x0 != x1:
+        anchors = []
+        if (x1 - x0) * (y1 - y0) > SMALL_CHUNK and depth < 40:
+            ca, cb = {}, {}
+            for i in range(x0, x1):
+                ca[ka[i]] = ca.get(ka[i], 0) + 1
+            for j in range(y0, y1):
+                cb[kb[j]] = cb.get(kb[j], 0) + 1
+            pos_b = {kb[j]: j for j in range(y0, y1) if cb[kb[j]] == 1}
+            anchors = _lis_pairs([(i, pos_b[ka[i]]) for i in range(x0, x1) if ca[ka[i]] == 1 and ka[i] in pos_b])
+        if anchors:
+            pi, pj = x0, y0
+            for i, j in anchors:
+                _diff_range(ka, kb, pi, i, pj, j, out, depth + 1)
+                out.append(("equal", i, i + 1, j, j + 1))
+                pi, pj = i + 1, j + 1
+            _diff_range(ka, kb, pi, x1, pj, y1, out, depth + 1)
         else:
-            sm = difflib.SequenceMatcher(None, ma, mb, autojunk=False)
+            big = (x1 - x0) * (y1 - y0) > SMALL_CHUNK
+            sm = difflib.SequenceMatcher(None, ka[x0:x1], kb[y0:y1], autojunk=big)
             for tag, i1, i2, j1, j2 in sm.get_opcodes():
-                ops.append((tag, i1 + pre, i2 + pre, j1 + pre, j2 + pre))
+                out.append((tag, x0 + i1, x0 + i2, y0 + j1, y0 + j2))
     if suf:
-        ops.append(("equal", n - suf, n, m - suf, m))
-    return ops
+        out.append(("equal", a1 - suf, a1, b1 - suf, b1))
+
+
+def _sm_opcodes(ka, kb):
+    out = []
+    _diff_range(ka, kb, 0, len(ka), 0, len(kb), out)
+    merged = []
+    for op in out:
+        if merged and op[0] == "equal" and merged[-1][0] == "equal" and merged[-1][2] == op[1] and merged[-1][4] == op[3]:
+            merged[-1] = ("equal", merged[-1][1], op[2], merged[-1][3], op[4])
+        else:
+            merged.append(op)
+    return merged
 
 
 def diff_opcodes(a, b, ignore_ws=False, ignore_case=False, rules=None, anchors=None, eol_tags=("", "")):

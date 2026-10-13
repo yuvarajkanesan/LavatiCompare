@@ -34,3 +34,43 @@ class SecurityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LargeDiffTests(unittest.TestCase):
+    def test_anchor_diff_reconstructs_and_matches_small_path(self):
+        import random
+        from lavati import engine
+        random.seed(5)
+        a = [f"l{i}" for i in range(3000)] + ["dup"] * 5
+        b = list(a)
+        for _ in range(60):
+            b[random.randrange(len(b))] += "x"
+        for _ in range(30):
+            del b[random.randrange(len(b))]
+        for _ in range(30):
+            b.insert(random.randrange(len(b)), "new")
+        old = engine.SMALL_CHUNK
+        try:
+            engine.SMALL_CHUNK = 1000                      # force the anchor-splitting path
+            ops = engine.diff_opcodes(a, b)
+        finally:
+            engine.SMALL_CHUNK = old
+        out = []
+        for tag, i1, i2, j1, j2 in ops:
+            out += a[i1:i2] if tag == "equal" else b[j1:j2]
+        self.assertEqual(out, b)
+        self.assertEqual(ops[0][1], 0)
+        self.assertEqual(ops[-1][2], len(a))
+
+    def test_oversize_text_refused(self):
+        import tempfile
+        from lavati import engine
+        p = os.path.join(tempfile.mkdtemp(), "big.txt")
+        open(p, "w").write("x")
+        old = engine.MAX_TEXT_BYTES
+        try:
+            engine.MAX_TEXT_BYTES = 0
+            with self.assertRaises(engine.TooLarge):
+                engine.load_text_file(p)
+        finally:
+            engine.MAX_TEXT_BYTES = old

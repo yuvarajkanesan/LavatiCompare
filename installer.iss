@@ -79,8 +79,6 @@ Root: HKCU; Subkey: "Software\Classes\Directory\shell\LavatiCompareWith\command"
 [UninstallDelete]
 ; everything the app creates besides the install folder
 Type: filesandordirs; Name: "{app}\_internal"
-Type: filesandordirs; Name: "{userappdata}\LavatiCompare"
-Type: filesandordirs; Name: "{localappdata}\LavatiCompare"
 
 [InstallDelete]
 ; a clean update: remove files of the previous version that the new one no longer ships
@@ -90,6 +88,9 @@ Type: filesandordirs; Name: "{app}\_internal"
 Filename: "{app}\{#AppExe}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent
 
 [Code]
+var
+  KeepData: Boolean;
+
 const
   RunKey = 'Software\Microsoft\Windows\CurrentVersion\Run';
 
@@ -136,13 +137,25 @@ begin
   begin
     CleanRegistry;
     CleanGitConfig;
-    DeleteTree(ExpandConstant('{userappdata}\LavatiCompare'));
-    DeleteTree(ExpandConstant('{localappdata}\LavatiCompare'));
+    if not KeepData then
+    begin
+      DeleteTree(ExpandConstant('{userappdata}\LavatiCompare'));
+      DeleteTree(ExpandConstant('{localappdata}\LavatiCompare'));
+    end;
     { the uninstaller lives inside the install folder, so remove it a moment after it exits.
       Only our own files go, and rmdir without /s only removes the folder when it is empty, so a
       shared folder chosen at install time is never wiped. }
     Exec(ExpandConstant('{cmd}'), '/c ping 127.0.0.1 -n 3 >nul & del /q "' + ExpandConstant('{app}') + '\unins*.*" & rmdir "' + ExpandConstant('{app}') + '"', '', SW_HIDE, ewNoWait, Code);
   end;
+end;
+
+function HasParam(const Name: String): Boolean;
+var
+  i: Integer;
+begin
+  Result := False;
+  for i := 1 to ParamCount do
+    if CompareText(ParamStr(i), Name) = 0 then Result := True;
 end;
 
 { make sure a running copy is closed before an update replaces its files }
@@ -151,5 +164,12 @@ var
   Code: Integer;
 begin
   Exec(ExpandConstant('{cmd}'), '/c taskkill /F /IM {#AppExe}', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  { silent uninstalls wipe everything unless started with /KEEPDATA; interactive ones ask (default: wipe) }
+  if UninstallSilent then
+    KeepData := HasParam('/KEEPDATA')
+  else
+    KeepData := MsgBox('Keep your sessions, rules and settings?' + #13#10 + #13#10 +
+      'Choose Yes to keep them for a future install, or No to remove all Lavati Compare data from this computer.',
+      mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES;
   Result := True;
 end;

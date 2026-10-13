@@ -127,7 +127,7 @@ def prepare(path, cfg, encoding=None, use_formats=True):
             else:
                 raw = run_external(fmt["command"], path)
             _cache[key] = data = raw
-            if len(_cache) > 40:
+            if len(_cache) > 6:
                 _cache.pop(next(iter(_cache)))
         tf = engine.load_text_file(path, forced or ("UTF-8" if conv == "builtin" else None), raw=data)
         what = "converted text" if conv == "builtin" else "output of external converter"

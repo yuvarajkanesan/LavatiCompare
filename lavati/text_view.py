@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (QScrollArea, QCheckBox, QComboBox, QDialog, QDial
                                QSpinBox, QSplitter, QToolButton, QVBoxLayout, QWidget)
 
 from . import engine, fileformats, highlight, platform_utils, theme
+from .workers import run_responsive
 from .editor import CopyGutter, EditorPane, ERow, MiniMap
 from .textdialogs import PatchDialog, RulesDialog, store_rules_in_config
 from .widgets import Pill, Segmented, ToolbarAdapter, sty, toast, tool_button, vsep
@@ -422,7 +423,11 @@ class TextCompareView(QWidget):
     def _load_side(self, k, encoding=None):
         s = self.sides[k]
         try:
-            pr = fileformats.prepare(s.path, self.cfg, encoding or s.forced_enc)
+            big = bool(s.path) and os.path.exists(s.path) and os.path.getsize(s.path) > 8 * 1024 * 1024
+            if big:
+                pr = run_responsive(fileformats.prepare, s.path, self.cfg, encoding or s.forced_enc)
+            else:
+                pr = fileformats.prepare(s.path, self.cfg, encoding or s.forced_enc)
         except Exception as e:
             pr = fileformats.Prepared([], "UTF-8", "LF", False, None, True, None, f"Cannot read: {e}")
             toast(f"{os.path.basename(s.path)}: {e}", "error")
@@ -462,7 +467,10 @@ class TextCompareView(QWidget):
         tags = ("", "")
         if not rules.ignore_eol and self.sides["L"].eol != self.sides["R"].eol:
             tags = ("\0" + self.sides["L"].eol, "\0" + self.sides["R"].eol)
-        ops = engine.diff_opcodes(L, R, rules=rules, anchors=self.anchors, eol_tags=tags)
+        if len(L) + len(R) > 200_000:                  # big files: keep the window alive while diffing
+            ops = run_responsive(engine.diff_opcodes, L, R, False, False, rules, self.anchors, tags)
+        else:
+            ops = engine.diff_opcodes(L, R, rules=rules, anchors=self.anchors, eol_tags=tags)
         self.pairs, self.hunks = engine.text_pairs(L, R, ops, rules)
         n = len(self.pairs)
         show = [True] * n

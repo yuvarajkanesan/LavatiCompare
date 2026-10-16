@@ -51,6 +51,16 @@ previous version, or another commit), **History of the selected lines** runs `gi
 its HEAD or staged version. **Combine** keeps both sides of a difference (left lines first or right lines first), for one
 difference or all of them.
 
+*More for git comparisons.* **File > Local changes vs last commit** and the dialog's **Quick compare** buttons (including
+**Remote branch into my checkout**) open the common comparisons in one click. The dialog can **fetch** remote branches (and
+shows how old they are) and open a **Summary**: ahead/behind counts, the commits only on each side, a dry-run **merge preview**
+that lists conflicting files (git 2.38+), the commit graph, and a button that starts a three-way merge (into your working tree
+when one side is the working tree - nothing is committed). In a git folder comparison the **Git** menu can **restore selected
+files to the last commit** (with a backup), **stage / unstage** files, and **filter by author or commit message**; hovering a
+file shows who changed it. In Text Compare you can replace a side with the committed version and **stage just the text in a
+pane** (so only the differences you copied are staged). Submodules and Git LFS pointer files are flagged instead of being
+compared as if they were real content.
+
 ## Scripting
 ```
 set SRC="D:\work"

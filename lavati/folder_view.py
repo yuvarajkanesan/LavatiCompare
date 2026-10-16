@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDateTimeEdit, QDia
                                QStyledItemDelegate, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from . import connect_dialog, engine, fsops, gitvfs, platform_utils, remote, reports, theme, vfs
+from .gitsummary import GitFolderMixin
 from .textdialogs import RulesDialog
 from .widgets import Segmented, ToolbarAdapter, pick_file, pick_folder, split_browse_button, sty, toast, tool_button, vsep
 from .workers import TaskWorker
@@ -213,7 +214,9 @@ class ReportDialog(QDialog):
         lay.addWidget(bb)
 
 
-class FolderCompareView(QWidget):
+class FolderCompareView(GitFolderMixin, QWidget):
+    gitWho = Signal(object)           # {path: [(author, subject, sha)]} for git comparisons
+    openMerge = Signal(str, str, str, str)    # ours, base, theirs, output (three-way merge of a git comparison)
     openFile = Signal(str, str)       # left file, right file (local paths)
     openAs = Signal(str, str, str)    # kind, left, right
     resultChanged = Signal(str)
@@ -245,7 +248,9 @@ class FolderCompareView(QWidget):
         self._pending_sync = None
         self.generation = 0              # increments after every finished comparison
         self.git_renames = bool(extra.get("git_renames", True))
+        self._gf_detect()
         self._ui()
+        self._gf_connect()
         self.refresh()
 
     # --------------------------------------------------------------- UI
@@ -339,6 +344,13 @@ class FolderCompareView(QWidget):
         sn.addAction("Use a snapshot as the right side…", lambda: self.load_snapshot("R"))
         self.b_snap.setMenu(sn)
         b2.addWidget(self.b_snap)
+        self.b_git = tool_button("Git", "git", "Commits, merge preview, fetch, restore, stage and filter by author for this git comparison")
+        self.b_git.setPopupMode(QToolButton.InstantPopup)
+        gm = QMenu(self.b_git)
+        self.git_menu(gm)
+        self.b_git.setMenu(gm)
+        self.b_git.setVisible(bool(self.git_repo))
+        b2.addWidget(self.b_git)
         b_ref = tool_button("Refresh", "refresh", "Re-compare (F5)")
         b_rep = tool_button("Report", "report", "Save a difference report (HTML, text or XML)")
         b_ref.clicked.connect(self.refresh)
@@ -689,7 +701,7 @@ class FolderCompareView(QWidget):
                 kids = self._visible(n.children)
                 if kids or show_all:
                     out.append(n if (len(kids) == len(n.children) and all(a is b for a, b in zip(kids, n.children))) else self._clone(n, kids))
-            elif self._match_mode(n) and self._match_search(n):
+            elif self._match_mode(n) and self._match_search(n) and self._match_git(n):
                 out.append(n)
         return out
 
@@ -707,6 +719,7 @@ class FolderCompareView(QWidget):
             tip = STATUS_TEXT[n.status] + ("  (decided from size / time only)" if n.approx else "") \
                 + (f"  (renamed from {n.renamed_from})" if n.renamed_from else "")
             it.setToolTip(3, tip)
+            self._git_tip(it, n)
             for side, base in (("left", 0), ("right", 4)):
                 info = getattr(n, side)
                 if info is None:

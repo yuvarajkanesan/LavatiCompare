@@ -584,7 +584,7 @@ class MainWindow(QMainWindow):
             return None
         if dlg.three_way:
             ours, base, theirs = dlg.result_specs
-            return self.open_merge(ours, base, theirs, None, origin="git")
+            return self.open_merge(ours, base, theirs, getattr(dlg, "merge_output", None), origin="git")
         left, right = dlg.result_specs
         return self.open_compare("folder", left, right, {"git_renames": dlg.detect_renames})
 
@@ -647,6 +647,7 @@ class MainWindow(QMainWindow):
                 v = FolderCompareView(self.cfg, left, right, extra=extra)
                 v.openFile.connect(self.open_file_pair)
                 v.openAs.connect(self._open_as)
+                v.openMerge.connect(lambda o, b, t, out: self.open_merge(o, b or None, t, out or None, origin="git"))
             elif kind in ("text", "doc"):
                 v = TextCompareView(self.cfg, left, right)
             elif kind == "table":

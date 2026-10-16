@@ -132,6 +132,7 @@ class GitCompareDialog(QDialog):
         self.setWindowTitle("Compare Git revisions")
         self.setMinimumWidth(760)
         self.result_specs = None
+        self.merge_output = None
         self.three_way = False
         self.refs = {}
         lay = QVBoxLayout(self)
@@ -159,6 +160,15 @@ class GitCompareDialog(QDialog):
         self.status = QLabel()
         self.status.setWordWrap(True)
         lay.addWidget(self.status)
+        frow = QHBoxLayout()
+        self.fetch_lbl = QLabel()
+        self.fetch_lbl.setStyleSheet(f"color:{theme.MUTED};")
+        self.b_fetch = QPushButton("Fetch remote branches")
+        self.b_fetch.setToolTip("git fetch --all --prune: bring the remote branches up to date before comparing")
+        self.b_fetch.clicked.connect(self._fetch)
+        frow.addWidget(self.fetch_lbl, 1)
+        frow.addWidget(self.b_fetch)
+        lay.addLayout(frow)
         self.b_dl = QPushButton("Download Git")
         self.b_dl.setVisible(False)
         self.b_dl.clicked.connect(self._download)
@@ -222,6 +232,9 @@ class GitCompareDialog(QDialog):
         self.b_quick.clicked.connect(self._commit_vs_parent)
         self.b_merge = QPushButton("Three-way folder merge (left, merge base, right)")
         self.b_merge.clicked.connect(lambda: self._go(True))
+        self.b_sum = QPushButton("Summary and merge preview…")
+        self.b_sum.setToolTip("Ahead/behind, the commits on each side, whether a merge would conflict, and the commit graph")
+        self.b_sum.clicked.connect(self._summary)
         c = QPushButton("Cancel")
         c.clicked.connect(self.reject)
         ok = QPushButton("Compare")
@@ -230,6 +243,7 @@ class GitCompareDialog(QDialog):
         ok.clicked.connect(lambda: self._go(False))
         row.addWidget(self.b_quick)
         row.addWidget(self.b_merge)
+        row.addWidget(self.b_sum)
         row.addStretch(1)
         row.addWidget(c)
         row.addWidget(ok)
@@ -240,6 +254,45 @@ class GitCompareDialog(QDialog):
     def _download(self):
         download_git_with_progress(self)
         self._repo_changed()
+
+    def _top(self):
+        text = self.repo.text().strip()
+        return gitvfs.find_repo(text) if text else ""
+
+    def _fetch(self):
+        top = self._top()
+        if not top:
+            QMessageBox.warning(self, "Git", "Choose a folder inside a Git repository first.")
+            return
+        from .workers import run_responsive
+        try:
+            run_responsive(gitvfs.fetch, top)
+        except gitvfs.GitError as e:
+            QMessageBox.warning(self, "Fetch", str(e))
+            return
+        self._repo_changed()
+
+    def _summary(self):
+        top = self._top()
+        if not top:
+            QMessageBox.warning(self, "Git", "Choose a folder inside a Git repository first.")
+            return
+        from .gitsummary import GitSummaryDialog
+        a, b = self.rev_of("L"), self.rev_of("R")
+        try:
+            for rev in (a, b):
+                if rev not in gitvfs.SPECIAL and not gitvfs.resolve(top, rev):
+                    raise gitvfs.GitError(f"'{rev}' is not a known branch, tag or commit.")
+        except gitvfs.GitError as e:
+            QMessageBox.warning(self, "Git", str(e))
+            return
+        dlg = GitSummaryDialog(top, a, b, self)
+        if dlg.exec() and dlg.merge_request:
+            o, base, t, out = dlg.merge_request
+            self.three_way = True
+            self.result_specs = (o, base, t)
+            self.merge_output = out
+            self.accept()
 
     def _browse(self):
         d = pick_folder(self, "Repository folder", self.repo.text())
@@ -270,6 +323,12 @@ class GitCompareDialog(QDialog):
             except gitvfs.GitError as e:
                 self.refs = {}
                 self.status.setText(str(e))
+        if top:
+            from .gitsummary import _ago
+            self.fetch_lbl.setText(f"Remote branches last fetched: {_ago(gitvfs.last_fetch_time(top))}")
+        else:
+            self.fetch_lbl.setText("")
+        self.b_fetch.setEnabled(bool(top))
         for s in "LR":
             self._fill(s)
 

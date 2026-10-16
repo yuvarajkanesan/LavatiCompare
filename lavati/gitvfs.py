@@ -627,3 +627,138 @@ def file_at(repo, rev, rel):
         return run(repo, "cat-file", "blob", spec)
     except GitError:
         return None
+
+
+# ================================================================ remote / branch relationship helpers
+def eff_rev(rev):
+    """The revision to use for history questions: the working tree and index sit on top of HEAD."""
+    return "HEAD" if rev in SPECIAL else rev
+
+
+def fetch(repo):
+    """git fetch --all --prune (credentials come from the user's git setup; never prompts)."""
+    return run(repo, "fetch", "--all", "--prune", text=True).strip()
+
+
+def last_fetch_time(repo):
+    """Epoch seconds of the last fetch (0 if never)."""
+    gd = run(repo, "rev-parse", "--git-common-dir", text=True, check=False).strip() or ".git"
+    if not os.path.isabs(gd):
+        gd = os.path.join(repo, gd)
+    try:
+        return os.path.getmtime(os.path.join(gd, "FETCH_HEAD"))
+    except OSError:
+        return 0.0
+
+
+def ahead_behind(repo, a, b):
+    """(commits only in a, commits only in b)."""
+    out = run(repo, "rev-list", "--left-right", "--count", f"{safe_rev(eff_rev(a))}...{safe_rev(eff_rev(b))}", "--",
+              text=True, check=False).split()
+    return (int(out[0]), int(out[1])) if len(out) == 2 else (0, 0)
+
+
+def commits_only_in(repo, a, b, limit=500):
+    """Commits reachable from a but not from b (newest first)."""
+    return log(repo, f"{safe_rev(eff_rev(b))}..{safe_rev(eff_rev(a))}", limit)
+
+
+def merge_preview(repo, a, b):
+    """Dry-run merge of a and b: {'clean': bool, 'conflicts': [paths], 'messages': text}. Needs git 2.38+."""
+    v = version()
+    if not v or v < (2, 38):
+        raise GitError("The merge preview needs git 2.38 or newer (use 'Download Git' in Settings for a current one).")
+    out = run(repo, "merge-tree", "--write-tree", "--name-only", safe_rev(eff_rev(a)), safe_rev(eff_rev(b)), text=True, check=False)
+    lines = out.split("\n")
+    conflicts, i = [], 1
+    while i < len(lines) and lines[i].strip():
+        conflicts.append(lines[i])
+        i += 1
+    return {"clean": not conflicts, "conflicts": conflicts, "messages": "\n".join(lines[i + 1:]).strip()}
+
+
+def changed_files(repo, a, b, limit=3000):
+    """{path: [(author, subject, short sha), ...]} for files touched by commits on either side since they diverged."""
+    ra, rb = eff_rev(a), eff_rev(b)
+    if ra == rb:
+        return {}
+    out = run(repo, "log", "--no-color", "--name-only", f"-n{int(limit)}", "--format=%x01%an%x02%s%x02%h",
+              f"{safe_rev(ra)}...{safe_rev(rb)}", "--", text=True, check=False)
+    who, cur = {}, None
+    for line in out.splitlines():
+        if line.startswith("\x01"):
+            p = line[1:].split("\x02")
+            cur = (p[0], p[1] if len(p) > 1 else "", p[2] if len(p) > 2 else "")
+        elif line and cur:
+            who.setdefault(line, []).append(cur)
+    return who
+
+
+def _inside(repo, rel):
+    dest = os.path.realpath(os.path.join(repo, rel))
+    root = os.path.realpath(repo)
+    if not (dest == root or dest.startswith(root + os.sep)) or rel.replace("\\", "/").split("/")[0] == ".git":
+        raise GitError(f"'{rel}' is outside the repository")
+    return dest
+
+
+def restore_paths(repo, rev, rels, backup_dir=None):
+    """Put files back to how they were at `rev` (HEAD = discard local changes). Existing files are backed up first.
+    Files that did not exist at `rev` are removed. Returns the number of files changed."""
+    import shutil
+    n = 0
+    for rel in rels:
+        dest = _inside(repo, rel)
+        data = file_at(repo, rev, rel)
+        if os.path.isfile(dest) and backup_dir:
+            bk = os.path.join(backup_dir, *rel.split("/"))
+            os.makedirs(os.path.dirname(bk), exist_ok=True)
+            shutil.copy2(dest, bk)
+        if data is None:
+            if os.path.isfile(dest):
+                os.remove(dest)
+                n += 1
+            continue
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        with open(dest, "wb") as f:
+            f.write(data)
+        n += 1
+    return n
+
+
+def stage_paths(repo, rels):
+    for rel in rels:
+        _inside(repo, rel)
+    run(repo, "add", "-A", "--", *rels)
+
+
+def unstage_paths(repo, rels):
+    for rel in rels:
+        _inside(repo, rel)
+    run(repo, "reset", "-q", "--", *rels, check=False)
+
+
+def stage_blob(repo, rel, data):
+    """Make the index hold exactly `data` for `rel` (like `git add -p` for a whole edited file) without touching the working file."""
+    _inside(repo, rel)
+    sha = run(repo, "hash-object", "-w", "--stdin", input=data, text=True).strip()
+    cur = run(repo, "ls-files", "-s", "--", rel, text=True, check=False).split()
+    mode = cur[0] if cur else "100644"
+    run(repo, "update-index", "--add", "--cacheinfo", f"{mode},{sha},{rel}")
+
+
+def graph_text(repo, limit=400):
+    fmt = "%h%d %s  (%an, %ad)"
+    return run(repo, "log", "--graph", "--decorate", "--all", "--color=never", "--date=short", f"--format={fmt}",
+               f"-n{int(limit)}", text=True, check=False)
+
+
+def is_lfs_pointer(data):
+    return isinstance(data, (bytes, bytearray)) and len(data) < 1024 and bytes(data[:40]).startswith(b"version https://git-lfs.github.com/spec/")
+
+
+def count_submodules(repo, rev):
+    if rev in SPECIAL:
+        rev = "HEAD"
+    out = run(repo, "ls-tree", "-r", "-z", safe_rev(rev), "--", text=True, check=False)
+    return sum(1 for rec in out.split("\0") if rec.startswith("160000 "))

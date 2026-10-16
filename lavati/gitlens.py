@@ -11,6 +11,11 @@ from . import gitvfs, theme, vfs
 from .widgets import toast
 
 
+def engine_decode(data):
+    from . import engine
+    return engine.decode_bytes(data)
+
+
 class TextViewerDialog(QDialog):
     """Read-only monospace text with optional extra buttons: [(label, callback)]."""
 
@@ -130,6 +135,7 @@ class GitLensMixin:
 
     def _gl_init(self):
         self.git_info = {"L": None, "R": None}
+        self.stage_info = {"L": None, "R": None}
         self.blame_on = False
         self._blame_gen = {"L": 0, "R": 0}
         self._blame_timer = QTimer(self)
@@ -151,7 +157,15 @@ class GitLensMixin:
             except Exception:
                 info = None
             self.git_info[k] = info
-        self.b_git.setVisible(any(self.git_info.values()))
+        self.b_git.setVisible(any(self.git_info.values()) or any(self.stage_info.values()))
+        for k in ("L", "R"):
+            try:
+                if self.sides[k].path and not self.sides[k].readonly and os.path.getsize(self.sides[k].path) < 1024:
+                    with open(self.sides[k].path, "rb") as f:
+                        if gitvfs.is_lfs_pointer(f.read()):
+                            toast("This file is a Git LFS pointer, not the real content. Install git-lfs to compare the real file.", "warn")
+            except OSError:
+                pass
         if self.blame_on:
             self._blame_refresh()
 
@@ -288,6 +302,10 @@ class GitLensMixin:
         v = win.open_compare("text", pa, pb)
         if v is not None and hasattr(v, "set_titles"):
             v.set_titles(label(a, ea), label(b, eb))
+        if v is not None and hasattr(v, "stage_info") and a in ("INDEX", "HEAD"):
+            # the left side is an editable copy of the staged / committed file: copy differences into it, then stage it
+            v.stage_info["L"] = (repo, rel)
+            v.b_git.setVisible(True)
 
     def _git_menu(self):
         m = QMenu(self)
@@ -301,4 +319,43 @@ class GitLensMixin:
         m.addSeparator()
         m.addAction("Compare local changes with the last commit (HEAD)", lambda: self.compare_with_version("HEAD"))
         m.addAction("Compare local changes with the staged version", lambda: self.compare_with_version("INDEX"))
+        m.addSeparator()
+        m.addAction("Replace this side with the last committed version (undoable)", lambda: self.restore_side("HEAD"))
+        m.addAction("Stage this side's text as the file for the next commit", self.stage_side)
         return m
+
+    def restore_side(self, rev="HEAD", k=None):
+        """Load the committed version of the file into the pane (an edit you can undo and save, or leave unsaved)."""
+        k = k or self._focus
+        info = self.git_info.get(k) or (self.stage_info.get(k) if hasattr(self, "stage_info") else None)
+        if not info:
+            toast("This file is not tracked by git", "warn")
+            return
+        if self.sides[k].readonly:
+            toast("That side is read-only", "warn")
+            return
+        data = gitvfs.file_at(info[0], rev, info[1])
+        if data is None:
+            toast("The file does not exist in that version", "warn")
+            return
+        text, _enc, _eol = engine_decode(data)
+        pane = self.panes[k]
+        pane.replace_lines(0, len(pane.lines), text.splitlines())
+        toast("Replaced with the committed version. Ctrl+Z undoes it; Save writes it.")
+
+    def stage_side(self, k=None):
+        """git add for the text shown in this pane, even when it was never saved: stage only the differences you copied in."""
+        k = k or self._focus
+        info = self.git_info.get(k) or (self.stage_info.get(k) if hasattr(self, "stage_info") else None)
+        if not info:
+            toast("This file is not tracked by git", "warn")
+            return
+        pane, s = self.panes[k], self.sides[k]
+        nl = {"CRLF": "\r\n", "CR": "\r"}.get(s.eol, "\n")
+        text = nl.join(pane.lines) + (nl if pane.lines and s.final_nl else "")
+        try:
+            gitvfs.stage_blob(info[0], info[1], text.encode("utf-8", "replace"))
+        except gitvfs.GitError as e:
+            QMessageBox.warning(self, "Stage", str(e))
+            return
+        toast(f"Staged {info[1]} (the working file on disk is unchanged)")

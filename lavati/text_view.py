@@ -5,7 +5,7 @@ import os
 import re
 import time
 
-from PySide6.QtCore import QTimer, Qt, Signal
+from PySide6.QtCore import QSize, QTimer, Qt, Signal
 from PySide6.QtGui import QActionGroup, QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QScrollArea, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFrame, QHBoxLayout,
                                QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton,
@@ -86,12 +86,16 @@ class SideHeader(QFrame):
         self.meta.setPopupMode(QToolButton.InstantPopup)
         self.meta.setStyleSheet(f"QToolButton {{ color:{theme.MUTED}; font-size:9pt; padding:2px 14px 2px 6px; }}")
         self.open = QToolButton()
-        self.open.setText("Open file…")
-        self.open.setAutoRaise(True)
+        self.open.setText("Open")
+        self.open.setIcon(theme.icon("folder_open", theme.MUTED, 18))
+        self.open.setIconSize(QSize(16, 16))
+        self.open.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.open.setCursor(Qt.PointingHandCursor)
-        self.open.setToolTip("Load a file into this side (replaces the text shown here)")
-        self.open.setStyleSheet(f"QToolButton {{ color:{theme.ACCENT}; font-size:9pt; font-weight:600; padding:2px 8px; }}"
-                                f"QToolButton:hover {{ background:{theme.HOVER}; border-radius:5px; }}")
+        self.open.setToolTip("Open a file on this side (replaces the text shown here)")
+        self.open.setStyleSheet(f"QToolButton {{ color:{theme.TEXT}; font-size:9pt; padding:3px 10px 3px 8px; border:1px solid {theme.BORDER};"
+                                f" border-radius:6px; background:{theme.SURFACE}; }}"
+                                f"QToolButton:hover {{ background:{theme.ACCENT_SOFT}; border-color:{theme.ACCENT}; color:{theme.ACCENT}; }}"
+                                f"QToolButton:pressed {{ background:{theme.HOVER}; }}")
         self.badge = Pill("Edited", theme.AMBER, theme.CHIP_AMBER)
         self.ro = Pill("Read-only", theme.MUTED, theme.CHIP_GRAY)
         self.mixed = Pill("Mixed line endings", theme.RED, theme.RED_BG)

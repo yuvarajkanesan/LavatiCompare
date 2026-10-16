@@ -232,3 +232,51 @@ class OpenFileIntoSideTests(unittest.TestCase):
             v.close()
         finally:
             shutil.rmtree(d, ignore_errors=True)
+
+
+class SaveBothSidesTests(unittest.TestCase):
+    def test_save_and_save_as_on_each_side(self):
+        import lavati.text_view as tv
+        d = tempfile.mkdtemp()
+        try:
+            cfg = config.Config(os.path.join(d, "cfg.json"))
+            existing = os.path.join(d, "existing.txt")
+            with open(existing, "w", newline="") as fh:
+                fh.write("one\ntwo\n")
+            v = TextCompareView(cfg, existing, "")
+            v.show()
+            self.assertTrue(v.headers["L"].save.isEnabled())             # always usable: the arrow offers Save as
+            self.assertFalse(v._savable("L"))                            # but an unchanged file has nothing new to save
+            self.assertFalse(v._savable("R"))                            # empty pasted side: nothing to save
+            self.assertFalse(v.b_save.isEnabled())
+            v.panes["L"].replace_lines(1, 2, ["TWO"])
+            v.panes["R"].replace_lines(0, 0, ["pasted a", "pasted b"])
+            v._flush()
+            self.assertTrue(v._savable("L") and v._savable("R"))
+            self.assertTrue(v.b_save.isEnabled())
+            target = os.path.join(d, "saved_right.txt")
+            orig = tv.QFileDialog.getSaveFileName
+            tv.QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (target, ""))
+            try:
+                v.save()                                                 # toolbar Save: left in place, right through Save as
+            finally:
+                tv.QFileDialog.getSaveFileName = orig
+            with open(existing, newline="") as fh:
+                self.assertEqual(fh.read(), "one\nTWO\n")
+            with open(target, newline="") as fh:
+                self.assertEqual(fh.read(), "pasted a\npasted b\n")
+            self.assertEqual(v.sides["R"].path, target)
+            self.assertFalse(v.b_save.isEnabled())
+            # Save as on the left side writes a copy and the side now points to it
+            copy = os.path.join(d, "copy.txt")
+            tv.QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (copy, ""))
+            try:
+                v.save_as("L")
+            finally:
+                tv.QFileDialog.getSaveFileName = orig
+            self.assertEqual(v.sides["L"].path, copy)
+            with open(copy, newline="") as fh:
+                self.assertEqual(fh.read(), "one\nTWO\n")
+            v.close()
+        finally:
+            shutil.rmtree(d, ignore_errors=True)

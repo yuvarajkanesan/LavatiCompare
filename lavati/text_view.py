@@ -96,6 +96,20 @@ class SideHeader(QFrame):
                                 f" border-radius:6px; background:{theme.SURFACE}; }}"
                                 f"QToolButton:hover {{ background:{theme.ACCENT_SOFT}; border-color:{theme.ACCENT}; color:{theme.ACCENT}; }}"
                                 f"QToolButton:pressed {{ background:{theme.HOVER}; }}")
+        self.save = QToolButton()
+        self.save.setText("Save")
+        self.save.setIcon(theme.icon("save", theme.MUTED, 18))
+        self.save.setIconSize(QSize(16, 16))
+        self.save.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.save.setPopupMode(QToolButton.MenuButtonPopup)
+        self.save.setCursor(Qt.PointingHandCursor)
+        self.save.setToolTip("Save this side (the arrow offers Save as…)")
+        self.save.setStyleSheet(f"QToolButton {{ color:{theme.TEXT}; font-size:9pt; padding:3px 10px 3px 8px; border:1px solid {theme.BORDER};"
+                                f" border-radius:6px; background:{theme.SURFACE}; }}"
+                                f"QToolButton:hover {{ background:{theme.ACCENT_SOFT}; border-color:{theme.ACCENT}; color:{theme.ACCENT}; }}"
+                                f"QToolButton:pressed {{ background:{theme.HOVER}; }}"
+                                f"QToolButton:disabled {{ color:{theme.MUTED}; background:{theme.PANEL}; }}"
+                                f"QToolButton::menu-button {{ border:none; width:14px; }}")
         self.badge = Pill("Edited", theme.AMBER, theme.CHIP_AMBER)
         self.ro = Pill("Read-only", theme.MUTED, theme.CHIP_GRAY)
         self.mixed = Pill("Mixed line endings", theme.RED, theme.RED_BG)
@@ -107,6 +121,7 @@ class SideHeader(QFrame):
         lay.addWidget(self.ro)
         lay.addWidget(self.badge)
         lay.addWidget(self.open)
+        lay.addWidget(self.save)
         lay.addWidget(self.meta)
 
 
@@ -286,6 +301,11 @@ class TextCompareView(GitLensMixin, QWidget):
             self.headers[k] = SideHeader(k)
             self.headers[k].meta.setMenu(self._meta_menu(k))
             self.headers[k].open.clicked.connect(lambda _=False, k=k: self.open_file(k))
+            sm = QMenu(self.headers[k].save)
+            sm.addAction("Save", lambda k=k: self.save_side(k))
+            sm.addAction("Save as…", lambda k=k: self.save_as(k))
+            self.headers[k].save.setMenu(sm)
+            self.headers[k].save.clicked.connect(lambda _=False, k=k: self.save_side(k))
             pane = EditorPane()
             pane.wrap = self.wrap
             pane.rowClicked.connect(lambda r: self._row_clicked(r))
@@ -404,6 +424,7 @@ class TextCompareView(GitLensMixin, QWidget):
         root.addWidget(st)
 
         QShortcut(QKeySequence("Ctrl+Shift+O"), self, activated=self.go_to_symbol)
+        QShortcut(QKeySequence("Ctrl+Shift+S"), self, activated=lambda: self.save_as(self._focus))
         QShortcut(QKeySequence("F3"), self, activated=lambda: self.find_next(1))
         QShortcut(QKeySequence("Shift+F3"), self, activated=lambda: self.find_next(-1))
         QShortcut(QKeySequence("Alt+Down"), self, activated=lambda: self.step(1))
@@ -757,6 +778,7 @@ class TextCompareView(GitLensMixin, QWidget):
             t = time.strftime("%m/%d %H:%M", time.localtime(s.mtime)) if s.mtime else "new"
             h.meta.setText(f"{s.enc} · {s.eol} · {t}")
             h.badge.setVisible(self._side_modified(k))
+            h.save.setEnabled(True)               # the arrow offers Save as even when there is nothing new to save
             h.ro.setVisible(s.readonly)
             h.mixed.setVisible(s.mixed)
 
@@ -764,7 +786,7 @@ class TextCompareView(GitLensMixin, QWidget):
         return self.panes[k].is_modified() or self.sides[k].meta_dirty
 
     def _update_buttons(self):
-        self.b_save.setEnabled(any(self._side_modified(k) and not self.sides[k].readonly for k in "LR"))
+        self.b_save.setEnabled(any(self._savable(k) for k in "LR"))
         p = self.panes[self._focus]
         self.b_undo.setEnabled(p.can_undo())
         self.b_redo.setEnabled(p.can_redo())
@@ -1178,17 +1200,40 @@ class TextCompareView(GitLensMixin, QWidget):
         # pasted text that was never saved to a file is a scratch pad: closing the tab does not ask about it
         return any(self._side_modified(k) and not self.sides[k].readonly and self.sides[k].path for k in "LR")
 
+    def _savable(self, k):
+        """Something on this side can be saved: edits to its file, or pasted text that has no file yet."""
+        s = self.sides[k]
+        if s.readonly:
+            return False
+        return self._side_modified(k) or (not s.path and bool(self.panes[k].lines))
+
     def save(self):
-        if not self.has_unsaved():
+        """Save both sides: files with edits are written in place; pasted text asks where to save it."""
+        todo = [k for k in ("L", "R") if self._savable(k)]
+        if not todo:
             toast("Nothing to save", "warn")
             return
-        for k in ("L", "R"):
-            s = self.sides[k]
-            if self._side_modified(k) and not s.readonly and s.path:
-                self._write(k, s.path)
+        for k in todo:
+            self.save_side(k, quiet=True)
         self._refresh_headers()
         self._update_buttons()
-        toast("Saved")
+
+    def save_side(self, k, quiet=False):
+        """Save one side: in place when it has a file, otherwise through Save as."""
+        s = self.sides[k]
+        if s.readonly:
+            toast("That side is read-only", "warn")
+            return
+        if not s.path:
+            return self.save_as(k)
+        if not self._side_modified(k):
+            if not quiet:
+                toast("No changes to save on this side", "info")
+            return
+        if self._write(k, s.path):
+            self._refresh_headers()
+            self._update_buttons()
+            toast(f"Saved {os.path.basename(s.path)}")
 
     def _write(self, k, path):
         s, pane = self.sides[k], self.panes[k]
@@ -1207,12 +1252,17 @@ class TextCompareView(GitLensMixin, QWidget):
 
     def save_as(self, k):
         s = self.sides[k]
-        path, _ = QFileDialog.getSaveFileName(self, "Save as", s.path)
+        start = s.path or os.path.join(os.path.expanduser("~"), "pasted.txt")
+        path, _ = QFileDialog.getSaveFileName(self, f"Save the {'left' if k == 'L' else 'right'} side as", start)
         if path and self._write(k, path):
             s.path = path
+            s.title = ""
             s.readonly = False
             self.panes[k].readonly = False
+            self._gl_detect()
             self._refresh_headers()
+            self._update_buttons()
+            self.pathsChanged.emit()
             toast(f"Saved {os.path.basename(path)}")
 
     # ======================================================== find / goto

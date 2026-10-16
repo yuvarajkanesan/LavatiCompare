@@ -86,6 +86,8 @@ def detect(left, right):
         return "media", "Media vs Media"
     if le in engine.DOC_EXTS and re_ in engine.DOC_EXTS:
         return "doc", "Document vs Document"
+    if le == ".class" and re_ == ".class":
+        return "text", "Java class vs Java class (disassembled)"
     for p in (left, right):
         try:
             with open(p, "rb") as f:
@@ -1109,7 +1111,9 @@ class HomePage(QWidget):
         self.s_backup = QCheckBox("Back up overwritten and deleted files by default")
         self.s_recycle = QCheckBox("Use Recycle Bin / Trash for deletes by default")
         self.s_restore = QCheckBox("Reopen the tabs that were open when I last closed the app")
-        for cb, key in ((self.s_backup, "backup_overwritten"), (self.s_recycle, "use_recycle_bin"), (self.s_restore, "restore_tabs")):
+        self.s_updates = QCheckBox("Tell me when a new version is released (asks github.com once a day; nothing about you or your files is sent)")
+        for cb, key in ((self.s_backup, "backup_overwritten"), (self.s_recycle, "use_recycle_bin"), (self.s_restore, "restore_tabs"),
+                        (self.s_updates, "check_updates")):
             cb.setChecked(bool(self.cfg[key]))
             cb.setStyleSheet("border:none;")
             cb.toggled.connect(lambda on, k=key: self.cfg.__setitem__(k, on))

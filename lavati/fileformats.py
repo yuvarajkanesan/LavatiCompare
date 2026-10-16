@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 
-from . import docs, engine, platform_utils, vfs
+from . import docs, engine, platform_utils, vfs, javaclass
 
 BUILTIN_FORMATS = [
     dict(name="Word document", patterns="*.docx; *.docm; *.dotx", converter="builtin"),
@@ -114,6 +114,14 @@ def prepare(path, cfg, encoding=None, use_formats=True):
     fmt = match_format(cfg, path) if use_formats and path else None
     if not path or not os.path.exists(path):
         return Prepared([], "UTF-8", "LF", False, None, False, fmt, "")
+    if use_formats and path.lower().endswith(".class"):
+        # a compiled Java class: show it like `javap -p -c` (signatures and bytecode), no JDK needed
+        try:
+            text = javaclass.disassemble(path)
+        except javaclass.ClassError as e:
+            raise docs.ExtractError(str(e)) from e
+        tf = engine.load_text_file(path, "UTF-8", raw=text.encode("utf-8"))
+        return Prepared(tf.lines, "UTF-8", "LF", False, tf.mtime, True, fmt, "Showing the disassembled class (like javap -p -c) - read-only", True)
     forced = encoding or (fmt or {}).get("encoding") or None
     conv = (fmt or {}).get("converter", "")
     if conv in ("builtin", "external"):

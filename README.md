@@ -61,6 +61,20 @@ file shows who changed it. In Text Compare you can replace a side with the commi
 pane** (so only the differences you copied are staged). Submodules and Git LFS pointer files are flagged instead of being
 compared as if they were real content.
 
+*Code-aware Text Compare.* Syntax colouring for 80+ languages is built in (by extension, file name, `#!` line or content, e.g. `.h` C vs C++,
+`.m` MATLAB vs Objective-C). **Outline** shows the classes, methods and headings of both files and marks each as added, removed or changed
+(methods are matched by name, so moving code around does not hide a real change); **Ctrl+Shift+O** jumps to a symbol with fuzzy search.
+Java **.class** files open as disassembled bytecode (like `javap -p -c`, no JDK needed), so two compiled classes can be compared as text.
+
+*Diagnostics and updates.* Errors and crashes are written to a log in the app data folder (`Help > Open log folder`); nothing is sent
+anywhere. `Help > Report a problem` shows exactly what would be shared (user name removed) before you open a prefilled GitHub issue.
+`Help > Check for updates` asks github.com for the latest release; Settings can do this once a day (off by default).
+
+## Releasing
+1. Bump `__version__` in `lavati/__init__.py` (the installer reads it) and add a line to `CHANGELOG.md`.
+2. `git tag v2.1.0 && git push --tags`: the *Release* workflow tests, builds the installer, writes its SHA-256 and publishes a GitHub
+   release. Add the secrets `WINDOWS_PFX_BASE64` and `WINDOWS_PFX_PASSWORD` to sign it; locally set `SIGN_CERT_SHA1` before `build.bat`.
+
 ## Scripting
 ```
 set SRC="D:\work"

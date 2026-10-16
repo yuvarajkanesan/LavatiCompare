@@ -130,6 +130,10 @@ LANGUAGES = [
     Lang("Plain text", (".txt", ".log", ".text"), numbers=False, strings=()),
 ]
 
+from .langs_more import ALIASES as _ALIASES, ALIAS_NAMES as _ALIAS_NAMES, SHEBANGS as _SHEBANGS, build as _build_more  # noqa: E402
+
+LANGUAGES[-1:-1] = _build_more(Lang, _w)          # every extra language goes before 'Plain text'
+
 _BY_EXT = {}
 _BY_NAME = {}
 for _l in LANGUAGES:
@@ -137,26 +141,68 @@ for _l in LANGUAGES:
         _BY_EXT.setdefault(_e, _l)
     for _n in _l.names:
         _BY_NAME[_n.lower()] = _l
+_BY_LANG = {_l.name: _l for _l in LANGUAGES}
+for _name, _exts in _ALIASES.items():
+    for _e in _exts:
+        _BY_EXT.setdefault(_e, _BY_LANG[_name])
+for _name, _names in _ALIAS_NAMES.items():
+    for _n in _names:
+        _BY_NAME.setdefault(_n.lower(), _BY_LANG[_name])
 PLAIN = LANGUAGES[-1]
 LANG_NAMES = [l.name for l in LANGUAGES]
+_SHEBANG = re.compile(r"^#!\s*(?:\S*/)?(?:env\s+(?:-\S+\s+)*)?([\w.+-]+)")
 
 
-def language_for(path, override=None):
+def language_for(path, override=None, sample=""):
+    """Pick the language from the file name, then (for unknown names) from a #! line or from the content.
+
+    `sample` is the start of the file's text; it is only looked at when the name alone does not decide."""
     if override:
         for l in LANGUAGES:
             if l.name == override:
                 return l
     name = os.path.basename(path or "").lower()
-    if name in _BY_NAME:
-        return _BY_NAME[name]
-    ext = os.path.splitext(name)[1]
-    if name.startswith(".") and not ext:
-        ext = name
-    return _BY_EXT.get(ext, PLAIN)
+    found = _BY_NAME.get(name)
+    if found is None:
+        ext = os.path.splitext(name)[1]
+        if name.startswith(".") and not ext:
+            ext = name
+        found = _BY_EXT.get(ext)
+        if found is not None and sample:
+            found = _sniff(ext, found, sample)
+    if found is not None:
+        return found
+    if sample.startswith("#!"):
+        m = _SHEBANG.match(sample.split("\n", 1)[0])
+        if m:
+            interp = re.sub(r"[\d.]+$", "", m.group(1)) if m.group(1) not in _SHEBANGS else m.group(1)
+            lang = _SHEBANGS.get(m.group(1)) or _SHEBANGS.get(interp)
+            if lang in _BY_LANG:
+                return _BY_LANG[lang]
+    if sample.lstrip().startswith("<?xml"):
+        return _BY_LANG["XML"]
+    if sample.lstrip().startswith("<?php"):
+        return _BY_LANG["PHP"]
+    return PLAIN
 
 
-def language_name(path, override=None):
-    return language_for(path, override).name
+def _sniff(ext, found, sample):
+    """A few extensions are shared by several languages: look at the content."""
+    if ext == ".m":
+        if re.search(r"^\s*(?:@interface|@implementation|#import|@end)\b", sample, re.M):
+            return _BY_LANG["Objective-C"]
+    elif ext == ".h":
+        if re.search(r"\b(?:class|namespace|template\s*<|public:|private:|std::)", sample):
+            return _BY_LANG["C++"]
+        if re.search(r"^\s*(?:@interface|#import|@protocol)\b", sample, re.M):
+            return _BY_LANG["Objective-C"]
+    elif ext == ".v" and re.search(r"^\s*(?:Require|Lemma|Theorem|Definition|Inductive)\b", sample, re.M):
+        return _BY_LANG["Plain text"]
+    return found
+
+
+def language_name(path, override=None, sample=""):
+    return language_for(path, override, sample).name
 
 
 # ----------------------------------------------------------------- tokenizer

@@ -1,9 +1,9 @@
 """Main window: toolbar, menus, tabs, toasts, drag & drop and routing between session views."""
 import os
 
-from PySide6.QtCore import QPropertyAnimation, QSize, Qt, QTimer
-from PySide6.QtGui import QAction, QActionGroup, QColor, QKeySequence, QPainter, QPen, QShortcut
-from PySide6.QtWidgets import (QApplication, QDialog, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QMainWindow,
+from PySide6.QtCore import QPropertyAnimation, QSize, Qt, QTimer, Signal, QUrl
+from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QKeySequence, QPainter, QPen, QShortcut
+from PySide6.QtWidgets import (QApplication, QDialog, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QMainWindow, QPlainTextEdit,
                                QMenu, QMessageBox, QPushButton, QSizePolicy, QTabBar, QTabWidget, QToolBar, QToolButton,
                                QVBoxLayout, QWidget)
 
@@ -213,7 +213,47 @@ class DocTabBar(QTabBar):
         super().mouseReleaseEvent(e)
 
 
+class ReportProblemDialog(QDialog):
+    """Shows exactly what would be shared (environment, last error, recent log) so the user can edit it, then open a prefilled
+    GitHub issue or copy it. Nothing leaves the computer unless the user clicks Open."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        from . import diagnostics
+        self.diag = diagnostics
+        self.setWindowTitle("Report a problem")
+        self.resize(760, 560)
+        lay = QVBoxLayout(self)
+        lay.addWidget(QLabel("Describe what you were doing and what went wrong (first line = the title). The details below are added to the\n"
+                             "report - edit or delete anything you do not want to share. Nothing is sent until you click the GitHub button."))
+        self.text = QPlainTextEdit()
+        self.text.setPlainText("What happened:\n\nWhat I expected:\n\n" + diagnostics.report_text())
+        lay.addWidget(self.text, 1)
+        row = QHBoxLayout()
+        b_open = QPushButton("Open a GitHub issue")
+        b_open.setProperty("primary", True)
+        b_open.clicked.connect(self._issue)
+        b_copy = QPushButton("Copy")
+        b_copy.clicked.connect(lambda: QApplication.clipboard().setText(self.text.toPlainText()))
+        b_log = QPushButton("Open log folder")
+        b_log.clicked.connect(diagnostics.open_log_folder)
+        b_close = QPushButton("Close")
+        b_close.clicked.connect(self.reject)
+        for b in (b_open, b_copy, b_log):
+            row.addWidget(b)
+        row.addStretch(1)
+        row.addWidget(b_close)
+        lay.addLayout(row)
+
+    def _issue(self):
+        body = self.text.toPlainText()
+        title = (body.strip().splitlines() or [""])[0].replace("What happened:", "").strip() or "Problem report"
+        QDesktopServices.openUrl(QUrl(self.diag.issue_url(title[:90], body)))
+
+
 class MainWindow(QMainWindow):
+    updateChecked = Signal(object, bool)          # result dict or error text, started by the user?
+
     def __init__(self, cfg=None):
         super().__init__()
         self.cfg = cfg or config.Config()
@@ -356,6 +396,10 @@ class MainWindow(QMainWindow):
 
         h = mb.addMenu("Help")
         self._act(h, "&Keyboard shortcuts", lambda: ShortcutsDialog(self).exec(), "F1")
+        self._act(h, "Check for &updates…", lambda: self.check_for_updates(True), None, "Look for a newer release on GitHub")
+        self._act(h, "&Report a problem…", lambda: ReportProblemDialog(self).exec(), None, "Prepare a bug report with the log, then choose whether to share it")
+        self._act(h, "Open &log folder", lambda: __import__("lavati.diagnostics", fromlist=["x"]).open_log_folder(), None, "Where errors are recorded")
+        h.addSeparator()
         self._act(h, "&About Lavati Compare", lambda: AboutDialog(self).exec())
 
         self._act_new = QAction(self)
@@ -770,6 +814,55 @@ class MainWindow(QMainWindow):
                 kind, _ = detect(self.home.p_left.text(), paths[0])
                 if kind:
                     self.open_compare(kind, self.home.p_left.text(), paths[0])
+
+    # ------------------------------------------------------------ updates
+    def maybe_check_updates(self):
+        """Once a day, and only when the user turned it on in Settings."""
+        import time
+        if self.cfg["check_updates"] and time.time() - float(self.cfg["last_update_check"] or 0) > 86400:
+            QTimer.singleShot(4000, lambda: self.check_for_updates(False))
+
+    def check_for_updates(self, manual=True):
+        import threading
+        from . import updates
+        if not hasattr(self, "_upd_connected"):
+            self._upd_connected = True
+            self.updateChecked.connect(self._update_result)
+
+        def work():
+            try:
+                res = updates.check()
+            except Exception as e:
+                res = str(e)
+            try:
+                self.updateChecked.emit(res, manual)
+            except RuntimeError:
+                pass
+        if manual:
+            self.show_toast("Checking for updates…", "info")
+        threading.Thread(target=work, daemon=True).start()
+
+    def _update_result(self, res, manual):
+        import time
+        if isinstance(res, str):
+            if manual:
+                QMessageBox.information(self, "Updates", f"Could not check for updates:\n{res}\n\nYou can look at the releases page yourself.")
+            return
+        self.cfg["last_update_check"] = time.time()
+        if res["status"] == "newer":
+            box = QMessageBox(self)
+            box.setWindowTitle("Update available")
+            box.setText(f"Lavati Compare {res['version']} is available (you have {__version__}).")
+            if res["notes"]:
+                box.setDetailedText(res["notes"])
+            go = box.addButton("Open download page", QMessageBox.AcceptRole)
+            box.addButton("Later", QMessageBox.RejectRole)
+            box.exec()
+            if box.clickedButton() is go:
+                QDesktopServices.openUrl(QUrl(res["url"]))
+        elif manual:
+            QMessageBox.information(self, "Updates", "You have the latest version." if res["status"] == "current"
+                                    else "No release has been published yet.")
 
     def save_open_tabs(self):
         """Remember the open tabs (in tab order) so the next start can bring them back."""

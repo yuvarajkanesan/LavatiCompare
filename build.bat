@@ -26,6 +26,7 @@ set ISCC=
 if exist "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" set ISCC=%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe
 if exist "%ProgramFiles%\Inno Setup 6\ISCC.exe" set ISCC=%ProgramFiles%\Inno Setup 6\ISCC.exe
 if exist "%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" set ISCC=%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe
+python installer\make_version.py || goto :err
 rem --- code signing: removes the "Unknown publisher" warning ---
 rem Set SIGN_CERT_SHA1 to the thumbprint of a code-signing certificate that is in your Windows certificate store
 rem (optional SIGN_TIMESTAMP_URL), or set LAVATI_SIGNTOOL to a full command using $f for the file.

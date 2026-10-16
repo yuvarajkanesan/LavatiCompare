@@ -1,6 +1,6 @@
 ; Inno Setup script - run build.bat first (it produces dist\LavatiCompare\).
 #define AppName "Lavati Compare"
-#define AppVersion "2.0"
+#include "installer\version.inc"
 #define AppExe "LavatiCompare.exe"
 
 [Setup]

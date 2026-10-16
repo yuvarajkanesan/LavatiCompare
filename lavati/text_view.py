@@ -14,6 +14,8 @@ from PySide6.QtWidgets import (QScrollArea, QCheckBox, QComboBox, QDialog, QDial
 from . import engine, fileformats, highlight, platform_utils, theme
 from .workers import run_responsive
 from .gitlens import GitLensMixin
+from .outline import GoToSymbolDialog, OutlinePanel
+from . import symbols
 from .editor import CopyGutter, EditorPane, ERow, MiniMap
 from .textdialogs import PatchDialog, RulesDialog, store_rules_in_config
 from .widgets import Pill, Segmented, ToolbarAdapter, sty, toast, tool_button, vsep
@@ -208,6 +210,10 @@ class TextCompareView(GitLensMixin, QWidget):
         m.addAction("Clear manual alignments", self.clear_alignments)
         self.b_align.setMenu(m)
         bl.addWidget(self.b_align)
+        self.b_outline = tool_button("Outline", "layers", "Show the code structure (classes, methods, headings) and which of them changed. "
+                                     "Ctrl+Shift+O jumps to a symbol.", checkable=True)
+        self.b_outline.toggled.connect(self.toggle_outline)
+        bl.addWidget(self.b_outline)
         self.b_git = tool_button("Git", "git", "Blame (who changed each line), file history and comparing with earlier versions")
         self.b_git.setPopupMode(QToolButton.InstantPopup)
         self.b_git.setMenu(self._git_menu())
@@ -305,7 +311,22 @@ class TextCompareView(GitLensMixin, QWidget):
         self.vsplit.setHandleWidth(7)
         self.vsplit.setChildrenCollapsible(False)
         self.vsplit.setStyleSheet(f"QSplitter::handle {{ background:{theme.BORDER}; }} QSplitter::handle:hover {{ background:{theme.ACCENT}; }}")
-        self.vsplit.addWidget(bodyw)
+        self.outline = OutlinePanel()
+        self.outline.activated.connect(self.goto_symbol)
+        self.outline.hide()
+        self.osplit = QSplitter(Qt.Horizontal)
+        self.osplit.setHandleWidth(1)
+        self.osplit.setChildrenCollapsible(False)
+        self.osplit.addWidget(self.outline)
+        self.osplit.addWidget(bodyw)
+        self.osplit.setStretchFactor(0, 0)
+        self.osplit.setStretchFactor(1, 1)
+        self.osplit.setSizes([260, 1000])
+        self._outline_timer = QTimer(self)
+        self._outline_timer.setSingleShot(True)
+        self._outline_timer.setInterval(350)
+        self._outline_timer.timeout.connect(self._outline_refresh)
+        self.vsplit.addWidget(self.osplit)
         root.addWidget(self.vsplit, 1)
         self._apply_layout()
         for a, b in (("L", "R"), ("R", "L")):
@@ -368,6 +389,7 @@ class TextCompareView(GitLensMixin, QWidget):
         sl.addWidget(self.s_hunk)
         root.addWidget(st)
 
+        QShortcut(QKeySequence("Ctrl+Shift+O"), self, activated=self.go_to_symbol)
         QShortcut(QKeySequence("F3"), self, activated=lambda: self.find_next(1))
         QShortcut(QKeySequence("Shift+F3"), self, activated=lambda: self.find_next(-1))
         QShortcut(QKeySequence("Alt+Down"), self, activated=lambda: self.step(1))
@@ -478,7 +500,13 @@ class TextCompareView(GitLensMixin, QWidget):
             if f and f.get("language"):
                 fmt_lang = f["language"]
                 break
-        return highlight.language_for(path, self.lang_override or fmt_lang or None)
+        sample = ""
+        for k in ("L", "R"):
+            lines = self.panes[k].lines[:40]
+            if lines:
+                sample = "\n".join(lines)
+                break
+        return highlight.language_for(path, self.lang_override or fmt_lang or None, sample)
 
     # ============================================================ model
     def _rebuild(self):
@@ -581,6 +609,58 @@ class TextCompareView(GitLensMixin, QWidget):
         self.resultChanged.emit(f"{len(self.hunks)} hunks" if self.hunks else "identical")
         self._update_detail()
         self._update_buttons()
+        self._outline_later()
+
+    # ============================================================ code structure
+    def _outline_later(self):
+        if self.outline.isVisible():
+            self._outline_timer.start()
+
+    def toggle_outline(self, on):
+        self.outline.setVisible(on)
+        if on:
+            self._outline_refresh()
+
+    def _symbol_rows(self):
+        lang = self.language().name
+        if not symbols.supported(lang):
+            return [], False, lang
+        pl, pr_ = self.panes["L"], self.panes["R"]
+
+        def marks(p):
+            return p.marks if p.marks and len(p.marks) == len(p.lines) else None
+        ls = symbols.extract(pl.lines, lang, marks(pl))
+        rs = symbols.extract(pr_.lines, lang, marks(pr_))
+        rules = self.rules
+        rows = symbols.compare(ls, pl.lines, rs, pr_.lines, lambda a, b: a == b or rules.keys(a, "") == rules.keys(b, ""))
+        return rows, True, lang
+
+    def _outline_refresh(self):
+        if not self.outline.isVisible():
+            return
+        rows, ok, lang = self._symbol_rows()
+        self.outline.set_rows(rows, ok, lang)
+
+    def goto_symbol(self, lline, rline):
+        k = "L" if lline >= 0 else "R"
+        li = lline if lline >= 0 else rline
+        if li < 0:
+            return
+        pane = self.panes[k]
+        pane.set_cursor(li, 0)
+        r = pane.row_of_line(li)
+        for p in self.panes.values():
+            p.ensure_visible_row(r, True)
+        pane.setFocus()
+
+    def go_to_symbol(self):
+        rows, ok, lang = self._symbol_rows()
+        if not rows:
+            toast("No classes, methods or headings found" if ok else f"No code structure is available for {lang} yet", "warn")
+            return
+        dlg = GoToSymbolDialog(rows, self)
+        if dlg.exec() and dlg.choice:
+            self.goto_symbol(*dlg.choice)
 
     def _rules_summary(self):
         r = self.rules

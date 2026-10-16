@@ -179,6 +179,9 @@ def main(argv):
         shell.set_pending(os.path.abspath(args0[1]))
         return 0
 
+    from lavati import diagnostics
+    diagnostics.setup()                                  # error log + crash log in the app data folder
+
     from PySide6.QtCore import QEvent, Qt, Signal
     from PySide6.QtGui import QFont
     from PySide6.QtWidgets import QApplication, QProxyStyle, QStyle
@@ -229,8 +232,11 @@ def main(argv):
     styler = MenuStyler(app)
     app.installEventFilter(styler)
     app._menu_styler = styler
+    diagnostics.install_qt_handler()
     win = MainWindow(cfg)
+    diagnostics.on_error = lambda text: win.show_toast("Something went wrong. Help > Report a problem has the details.", "error")
     win.showMaximized()
+    win.maybe_check_updates()
     app.fileOpened.connect(lambda p: win.add_dropped([p]))
 
     args = list(args0)

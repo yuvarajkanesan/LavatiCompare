@@ -23,3 +23,5 @@ Thumbs.db
 # local test data
 *.lsnap
 tmp/
+
+installer/version.inc

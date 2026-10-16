@@ -32,6 +32,8 @@ DEFAULTS = {
     "file_formats": [],               # per-file-type rules, see fileformats.py
     "sync_sessions": [],              # saved synchronisation presets
     "sync_backup_dir": "",
+    "check_updates": False,          # ask GitHub once a day whether a newer release exists (off until the user opts in)
+    "last_update_check": 0,
     "restore_tabs": True,             # reopen the tabs that were open when the app was closed
     "open_tabs": [],            # "" = .lavati-backup inside the destination root
 }

@@ -1,0 +1,57 @@
+name: Release
+
+# Push a tag such as v2.1.0 to build the installer and publish it with its SHA-256.
+# Optional signing: add the repository secrets WINDOWS_PFX_BASE64 (your code-signing .pfx, base64) and WINDOWS_PFX_PASSWORD.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+      HAS_CERT: ${{ secrets.WINDOWS_PFX_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt pyasyncore pyasynchat
+      - name: Run the tests
+        run: python -m unittest discover -s tests
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+      - name: Import the signing certificate (optional)
+        if: ${{ env.HAS_CERT == 'true' }}
+        shell: pwsh
+        env:
+          PFX_B64: ${{ secrets.WINDOWS_PFX_BASE64 }}
+          PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
+        run: |
+          $bytes = [Convert]::FromBase64String($env:PFX_B64)
+          $path = Join-Path $env:RUNNER_TEMP "sign.pfx"
+          [IO.File]::WriteAllBytes($path, $bytes)
+          $cert = Import-PfxCertificate -FilePath $path -CertStoreLocation Cert:\CurrentUser\My -Password (ConvertTo-SecureString $env:PFX_PASSWORD -AsPlainText -Force)
+          "SIGN_CERT_SHA1=$($cert.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Remove-Item $path
+      - name: Build the app and the installer
+        shell: cmd
+        run: build.bat
+      - name: Checksum
+        shell: pwsh
+        run: |
+          $f = "dist\LavatiCompare-Setup.exe"
+          $h = (Get-FileHash $f -Algorithm SHA256).Hash.ToLower()
+          "$h  LavatiCompare-Setup.exe" | Out-File -FilePath "dist\LavatiCompare-Setup.exe.sha256" -Encoding ascii
+      - name: Publish the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" "dist\LavatiCompare-Setup.exe" "dist\LavatiCompare-Setup.exe.sha256" `
+            --title "Lavati Compare ${{ github.ref_name }}" --generate-notes

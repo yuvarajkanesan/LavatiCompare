@@ -347,6 +347,8 @@ class MainWindow(QMainWindow):
         self._act(f, "Connect to a &server…", self.connect_server, None, "Compare a local folder with FTP, SFTP, WebDAV, S3 ...", "plug")
         f.addSeparator()
         self._act(f, "&Save changes", lambda: self._cur("save"), "Ctrl+S", "Save modified files", "save", "save")
+        self._act(f, "Open file on the &left side…", lambda: self._cur("open_file", "L"), None, "Load a file into the left side of the text comparison")
+        self._act(f, "Open file on the &right side…", lambda: self._cur("open_file", "R"), None, "Load a file into the right side of the text comparison")
         self._act(f, "Save left as…", lambda: self._cur("save_as", "L"), None, "Save the left file under another name")
         self._act(f, "Save right as…", lambda: self._cur("save_as", "R"), None, "Save the right file under another name")
         self._act(f, "&Close tab", lambda: self.close_tab(self.tabs.currentIndex()), "Ctrl+W")
@@ -716,10 +718,23 @@ class MainWindow(QMainWindow):
         if hasattr(v, "optionsChanged"):
             v.optionsChanged.connect(lambda k=kind, vv=v, n=name: self._remember(k, vv, n, vv.left, vv.right))
         v.resultChanged.connect(lambda txt, k=kind, vv=v: self._result(k, getattr(vv, "left", left), getattr(vv, "right", right), txt))
+        if kind in ("text", "doc") and hasattr(v, "pathsChanged"):
+            v.pathsChanged.connect(lambda vv=v: self._text_paths_changed(vv))
         title = name if kind != "text" else (os.path.basename(right or left) or "Pasted text")
         self.add_tab(v, title)
         self.home.refresh()
         return v
+
+    def _text_paths_changed(self, v):
+        """A file was opened into a side of a text comparison: keep the tab title, session list and tab restore in step."""
+        l, r = v.sides["L"].path, v.sides["R"].path
+        self._tab_info[v] = dict(kind="text", left=l, right=r)
+        i = self.tabs.indexOf(v)
+        if i > 0:
+            self.tabs.setTabText(i, os.path.basename(r or l) or "Pasted text")
+        if l or r:
+            self._remember("text", v, session_name("text", l, r), l, r)
+            self.home.refresh()
 
     def _remember(self, kind, v, name, left, right):
         if not left and not right:

@@ -85,6 +85,13 @@ class SideHeader(QFrame):
         self.meta.setCursor(Qt.PointingHandCursor)
         self.meta.setPopupMode(QToolButton.InstantPopup)
         self.meta.setStyleSheet(f"QToolButton {{ color:{theme.MUTED}; font-size:9pt; padding:2px 14px 2px 6px; }}")
+        self.open = QToolButton()
+        self.open.setText("Open file…")
+        self.open.setAutoRaise(True)
+        self.open.setCursor(Qt.PointingHandCursor)
+        self.open.setToolTip("Load a file into this side (replaces the text shown here)")
+        self.open.setStyleSheet(f"QToolButton {{ color:{theme.ACCENT}; font-size:9pt; font-weight:600; padding:2px 8px; }}"
+                                f"QToolButton:hover {{ background:{theme.HOVER}; border-radius:5px; }}")
         self.badge = Pill("Edited", theme.AMBER, theme.CHIP_AMBER)
         self.ro = Pill("Read-only", theme.MUTED, theme.CHIP_GRAY)
         self.mixed = Pill("Mixed line endings", theme.RED, theme.RED_BG)
@@ -95,11 +102,13 @@ class SideHeader(QFrame):
         lay.addWidget(self.mixed)
         lay.addWidget(self.ro)
         lay.addWidget(self.badge)
+        lay.addWidget(self.open)
         lay.addWidget(self.meta)
 
 
 class TextCompareView(GitLensMixin, QWidget):
     resultChanged = Signal(str)
+    pathsChanged = Signal()                     # a file was opened into one of the sides
     blameReady = Signal(str, int, object)       # side, request number, blame data (or the exception)
 
     def __init__(self, cfg, left_path, right_path, parent=None, extra=None):
@@ -272,6 +281,7 @@ class TextCompareView(GitLensMixin, QWidget):
         for k in ("L", "R"):
             self.headers[k] = SideHeader(k)
             self.headers[k].meta.setMenu(self._meta_menu(k))
+            self.headers[k].open.clicked.connect(lambda _=False, k=k: self.open_file(k))
             pane = EditorPane()
             pane.wrap = self.wrap
             pane.rowClicked.connect(lambda r: self._row_clicked(r))
@@ -1304,6 +1314,32 @@ class TextCompareView(GitLensMixin, QWidget):
                 p.ensure_visible_row(r, True)
 
     # ============================================================ swap etc.
+    def open_file(self, k, path=None):
+        """Load a file into side k (also works for a pasted-text side), keeping the other side as it is."""
+        s, pane = self.sides[k], self.panes[k]
+        name = "left" if k == "L" else "right"
+        if self._side_modified(k) and (s.path or pane.lines):
+            what = "your edits to the file" if s.path else "the text you typed or pasted"
+            if QMessageBox.question(self, "Open file", f"Replace {what} on the {name} side?") != QMessageBox.Yes:
+                return
+        if not path:
+            from .widgets import pick_file
+            start = s.path or self.sides["R" if k == "L" else "L"].path
+            path = pick_file(self, f"Open a file on the {name} side", start)
+        if not path:
+            return
+        s.path, s.title, s.forced_enc, s.readonly = path, "", None, False
+        self._load_side(k)
+        self._gl_detect()
+        self.anchors = []
+        self.cur = self.cur_hunk = -1
+        self._rebuild()
+        if self.hunks:
+            self.goto_hunk(0)
+        self._refresh_headers()
+        self.pathsChanged.emit()
+        toast(f"Opened {os.path.basename(path)} on the {name} side")
+
     def swap_sides(self):
         a, b = self.sides["L"], self.sides["R"]
         keep = ("path", "enc", "eol", "mixed", "mtime", "readonly", "fmt", "note", "final_nl", "meta_dirty", "forced_enc")

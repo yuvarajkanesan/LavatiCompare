@@ -191,3 +191,44 @@ class PastedTextTests(unittest.TestCase):
             v.close()
         finally:
             shutil.rmtree(d, ignore_errors=True)
+
+
+class OpenFileIntoSideTests(unittest.TestCase):
+    def test_open_a_file_on_either_side_of_pasted_text(self):
+        import lavati.text_view as tv
+        d = tempfile.mkdtemp()
+        try:
+            cfg = config.Config(os.path.join(d, "cfg.json"))
+            f = os.path.join(d, "a.txt")
+            with open(f, "w") as fh:
+                fh.write("one\ntwo\nthree\n")
+            v = TextCompareView(cfg, "", "")
+            v.show()
+            changed = []
+            v.pathsChanged.connect(lambda: changed.append(1))
+            v.open_file("L", f)                                  # nothing typed yet: no question asked
+            self.assertEqual(v.panes["L"].lines, ["one", "two", "three"])
+            self.assertEqual(v.sides["L"].path, f)
+            self.assertEqual(changed, [1])
+            v.panes["R"].replace_lines(0, 0, ["one", "TWO", "three"])
+            v._flush()
+            self.assertEqual(len(v.hunks), 1)
+            # replacing typed text asks first; answering No keeps it
+            orig = tv.QMessageBox.question
+            tv.QMessageBox.question = staticmethod(lambda *a, **k: tv.QMessageBox.No)
+            try:
+                v.open_file("R", f)
+            finally:
+                tv.QMessageBox.question = orig
+            self.assertEqual(v.panes["R"].lines, ["one", "TWO", "three"])
+            tv.QMessageBox.question = staticmethod(lambda *a, **k: tv.QMessageBox.Yes)
+            try:
+                v.open_file("R", f)
+            finally:
+                tv.QMessageBox.question = orig
+            self.assertEqual(v.panes["R"].lines, ["one", "two", "three"])
+            self.assertEqual(len(v.hunks), 0)
+            self.assertTrue(v.headers["L"].open.isVisibleTo(v))
+            v.close()
+        finally:
+            shutil.rmtree(d, ignore_errors=True)

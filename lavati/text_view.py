@@ -456,6 +456,7 @@ class TextCompareView(GitLensMixin, QWidget):
         s.readonly, s.fmt, s.note, s.final_nl = pr.readonly, pr.fmt, pr.note, pr.final_newline
         s.meta_dirty = False
         pane = self.panes[k]
+        pane.empty_text = "" if s.path else "Paste or type text here  (Ctrl+V)"
         pane.set_lines(pr.lines)
         pane.readonly = s.readonly
         s.gen += 1
@@ -657,7 +658,7 @@ class TextCompareView(GitLensMixin, QWidget):
         for k in ("L", "R"):
             s, h = self.sides[k], self.headers[k]
             parts = os.path.normpath(s.path).split(os.sep) if s.path else []
-            h.path.setText(s.title or (os.sep.join(parts[-3:]) if parts else "(none)"))
+            h.path.setText(s.title or (os.sep.join(parts[-3:]) if parts else "Pasted text"))
             h.path.setToolTip(s.path or "")
             t = time.strftime("%m/%d %H:%M", time.localtime(s.mtime)) if s.mtime else "new"
             h.meta.setText(f"{s.enc} · {s.eol} · {t}")
@@ -1080,7 +1081,8 @@ class TextCompareView(GitLensMixin, QWidget):
 
     # ================================================================ save
     def has_unsaved(self):
-        return any(self._side_modified(k) and not self.sides[k].readonly for k in "LR")
+        # pasted text that was never saved to a file is a scratch pad: closing the tab does not ask about it
+        return any(self._side_modified(k) and not self.sides[k].readonly and self.sides[k].path for k in "LR")
 
     def save(self):
         if not self.has_unsaved():

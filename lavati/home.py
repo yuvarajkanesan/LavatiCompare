@@ -231,11 +231,22 @@ class PickDialog(QDialog):
         ok = QPushButton("Start")
         ok.setProperty("primary", True)
         ok.clicked.connect(self._ok)
+        self.paste = False
+        if kind == "text":
+            pb = QPushButton("Paste text instead")
+            pb.setToolTip("Compare two pieces of text you type or paste - no files needed")
+            pb.clicked.connect(self._paste)
+            row.insertWidget(0, pb)
         for b in (c, ok):
             b.setMinimumHeight(38)
             row.addWidget(b)
         lay.addSpacing(10)
         lay.addLayout(row)
+
+    def _paste(self):
+        self.paste = True
+        self.values = ["", ""]
+        self.accept()
 
     def _ok(self):
         vals = [b.text() for b in self.boxes]

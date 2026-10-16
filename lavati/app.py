@@ -299,6 +299,8 @@ class MainWindow(QMainWindow):
         for k, (title, *_rest) in KINDS.items():
             self._act(nm, title, lambda k=k: self.new_session(k))
         self._act(f, "&Open two files or folders…", self.open_dialog, "Ctrl+O", "Compare any two files or folders", "folder_open", "open")
+        self._act(f, "Compare pasted &text…", self.open_pasted_text, "Ctrl+Shift+T",
+                  "Type or paste two pieces of text and compare them - no files needed", "doc")
         self._act(f, "Compare &Git revisions…", self.open_git, None, "Branches, tags, commits, index and working tree", "git", "git")
         self._act(f, "Local changes vs &last commit…", self.open_local_changes, None,
                   "Compare your working copy of a git repository with its last commit", "git")
@@ -544,6 +546,16 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self.close)
 
     # ----------------------------------------------------------- sessions
+    def open_pasted_text(self, left="", right=""):
+        """Text compare with no files: two empty (or pre-filled) panes to type or paste into."""
+        v = self.open_compare("text", "", "")
+        if v is not None:
+            for k, text in (("L", left), ("R", right)):
+                if text:
+                    v.panes[k].replace_lines(0, 0, text.splitlines())
+            v.panes["L"].setFocus()
+        return v
+
     def open_local_changes(self, start_path=""):
         """One step: current local changes (working tree) against the last commit (HEAD) of a repository."""
         from .widgets import pick_folder
@@ -602,6 +614,8 @@ class MainWindow(QMainWindow):
         dlg = PickDialog(kind, l, r, self)
         if dlg.exec():
             v = dlg.values
+            if getattr(dlg, "paste", False):
+                return self.open_pasted_text()
             if kind == "merge":
                 self.open_merge(v[0], v[1] or None, v[2], v[3] or None)
             else:
@@ -657,12 +671,14 @@ class MainWindow(QMainWindow):
         if hasattr(v, "optionsChanged"):
             v.optionsChanged.connect(lambda k=kind, vv=v, n=name: self._remember(k, vv, n, vv.left, vv.right))
         v.resultChanged.connect(lambda txt, k=kind, vv=v: self._result(k, getattr(vv, "left", left), getattr(vv, "right", right), txt))
-        title = name if kind != "text" else os.path.basename(right or left)
+        title = name if kind != "text" else (os.path.basename(right or left) or "Pasted text")
         self.add_tab(v, title)
         self.home.refresh()
         return v
 
     def _remember(self, kind, v, name, left, right):
+        if not left and not right:
+            return                                    # pasted text has no paths to reopen
         left, right = remote.stash_url_secrets(left), remote.stash_url_secrets(right)
         extra = v.session_extra() if hasattr(v, "session_extra") else None
         self.cfg.add_session(session_name(kind, left, right) if left != "" else name, kind, left, right, extra=extra)
@@ -759,7 +775,7 @@ class MainWindow(QMainWindow):
         out = []
         for i in range(1, self.tabs.count()):
             info = self._tab_info.get(self.tabs.widget(i))
-            if info:
+            if info and (info.get("left") or info.get("right")):
                 info = dict(info)
                 w = self.tabs.widget(i)
                 if hasattr(w, "session_extra"):

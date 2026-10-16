@@ -172,3 +172,22 @@ class TextViewTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PastedTextTests(unittest.TestCase):
+    def test_compare_without_files(self):
+        d = tempfile.mkdtemp()
+        try:
+            cfg = config.Config(os.path.join(d, "cfg.json"))
+            v = TextCompareView(cfg, "", "")
+            v.show()
+            v.panes["L"].replace_lines(0, 0, ["alpha", "beta", "gamma"])
+            v.panes["R"].replace_lines(0, 0, ["alpha", "BETA", "gamma", "delta"])
+            v._flush()
+            self.assertEqual(len(v.hunks), 2)
+            self.assertFalse(v.has_unsaved())            # a scratch pad never nags about saving
+            v.combine("L", 0)
+            self.assertIn("beta", v.panes["R"].lines)
+            v.close()
+        finally:
+            shutil.rmtree(d, ignore_errors=True)

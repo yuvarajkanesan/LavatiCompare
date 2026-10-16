@@ -168,3 +168,71 @@ class QuickCompareTests(unittest.TestCase):
                 self.assertEqual(dlg.result_specs, (gitvfs.make_spec(top, want[0]), gitvfs.make_spec(top, want[1])))
         finally:
             shutil.rmtree(d, ignore_errors=True)
+
+
+@unittest.skipUnless(HAVE_GIT, "git 2.30+ not available")
+class RemoteToLocalTests(unittest.TestCase):
+    """Compare a remote branch with the checked-out working tree and copy differences into the local files."""
+
+    def setUp(self):
+        from lavati.folder_view import FolderCompareView
+        self.FolderCompareView = FolderCompareView
+        self.d = tempfile.mkdtemp(prefix="lavati-remote-")
+        self.r = r = os.path.join(self.d, "repo")
+        os.makedirs(r)
+        git(r, "init", "-q", "-b", "main")
+        for name, text in (("a.txt", "one\ntwo\n"), ("keep.txt", "same\n")):
+            with open(os.path.join(r, name), "w", newline="") as f:
+                f.write(text)
+        git(r, "add", "-A")
+        git(r, "commit", "-q", "-m", "base")
+        git(r, "checkout", "-q", "-b", "feat")
+        with open(os.path.join(r, "a.txt"), "w", newline="") as f:
+            f.write("one\nTWO from remote\nthree\n")
+        with open(os.path.join(r, "new.txt"), "w", newline="") as f:
+            f.write("only on remote\n")
+        git(r, "add", "-A")
+        git(r, "commit", "-q", "-m", "remote work")
+        git(r, "update-ref", "refs/remotes/origin/feat", "feat")          # pretend this branch lives on the remote
+        git(r, "checkout", "-q", "main")                                 # the local checkout
+        self.cfg = config.Config(os.path.join(self.d, "cfg.json"))
+
+    def tearDown(self):
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def test_copy_remote_differences_into_local_checkout(self):
+        import lavati.folder_view as fv
+        left, right = gitvfs.make_spec(self.r, "origin/feat"), gitvfs.make_spec(self.r, "WORKTREE")
+        v = self.FolderCompareView(self.cfg, left, right)
+        v.show()
+        self.assertTrue(wait(lambda: v.generation > 0, 15))
+        v.tree.selectAll()
+        orig = fv.QMessageBox.question
+        fv.QMessageBox.question = staticmethod(lambda *a, **k: fv.QMessageBox.Yes)
+        try:
+            v.copy_selected("R")                                         # remote (left) -> local checkout (right)
+            g = v.generation
+            self.assertTrue(wait(lambda: v.generation > g, 15))
+        finally:
+            fv.QMessageBox.question = orig
+        with open(os.path.join(self.r, "a.txt"), newline="") as f:
+            self.assertEqual(f.read(), "one\nTWO from remote\nthree\n")
+        self.assertTrue(os.path.exists(os.path.join(self.r, "new.txt")))
+        v.close()
+
+    def test_text_compare_copies_line_into_checked_out_file(self):
+        """Opening a file pair from a git comparison: the remote side is read-only, the checked-out file is editable and saves."""
+        remote_file = os.path.join(self.d, "remote_a.txt")
+        with open(remote_file, "wb") as f:
+            f.write(gitvfs.file_at(self.r, "origin/feat", "a.txt"))
+        local = os.path.join(self.r, "a.txt")
+        v = TextCompareView(self.cfg, remote_file, local)
+        v.show()
+        v.sides["L"].readonly = True
+        v.panes["L"].readonly = True
+        v.take("right", 0)
+        v._flush()
+        v.save()
+        with open(local, newline="") as f:
+            self.assertIn("TWO from remote", f.read())
+        v.close()

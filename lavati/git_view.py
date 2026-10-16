@@ -186,6 +186,12 @@ class GitCompareDialog(QDialog):
         self.src["L"].setCurrentIndex(2)
         self.src["R"].setCurrentIndex(0)
         lay.addLayout(grid)
+        self.edit_hint = QLabel()
+        self.edit_hint.setWordWrap(True)
+        lay.addWidget(self.edit_hint)
+        for s in ("L", "R"):
+            self.src[s].currentIndexChanged.connect(self._update_hint)
+        self._update_hint()
         self.c_renames = QCheckBox("Detect renamed files (git -M)")
         self.c_renames.setChecked(True)
         lay.addWidget(self.c_renames)
@@ -196,6 +202,8 @@ class GitCompareDialog(QDialog):
         ql.setStyleSheet(f"color:{theme.MUTED}; font-weight:700; font-size:8pt; letter-spacing:1px;")
         quick.addWidget(ql)
         for text, tip, left, right in (
+                ("Remote branch into my checkout", "Pick the remote branch on the left; the right side is your checked-out working tree, "
+                 "so you can copy differences from the remote branch into your local files (commit them yourself afterwards)", 4, 0),
                 ("Local changes vs last commit", "Everything you changed since the last commit (working tree against HEAD)", 2, 0),
                 ("Staged vs last commit", "What the next commit will contain (index against HEAD)", 2, 1),
                 ("Local changes vs staged", "Changes you have not staged yet (working tree against the index)", 1, 0)):
@@ -309,11 +317,30 @@ class GitCompareDialog(QDialog):
         self._history("R")
 
     def _preset(self, left_idx, right_idx):
-        """Set both sides (indexes into SOURCES) and compare straight away."""
+        """Set both sides (indexes into SOURCES). Presets with fixed sides compare straight away; the remote-branch one waits
+        for you to pick the branch."""
         self.c_base.setChecked(False)
         self.src["L"].setCurrentIndex(left_idx)
         self.src["R"].setCurrentIndex(right_idx)
+        if self.src["L"].currentData() == "remote":
+            self.val["L"].setFocus()
+            return
         self._go(False)
+
+    def _update_hint(self):
+        """Say which side can receive copied differences: only the working tree (your real files) is writable."""
+        kinds = [self.src[s].currentData() for s in ("L", "R")]
+        if "worktree" in kinds:
+            side = "right" if kinds[1] == "worktree" else "left"
+            txt = (f"The {side} side is your working tree, so differences can be copied into your local files. "
+                   "Commit them yourself afterwards.")
+            col = theme.MUTED
+        else:
+            txt = ("Both sides are commits or branches, which are read-only. To copy differences into your local files, "
+                   "set one side to Working tree.")
+            col = theme.AMBER
+        self.edit_hint.setText(txt)
+        self.edit_hint.setStyleSheet(f"color:{col};")
 
     def _go(self, three_way):
         repo = self.repo.text().strip()
